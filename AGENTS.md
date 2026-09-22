@@ -1,0 +1,60 @@
+# 專案 Agent 行為與開發守則 (Project Rules & Safety Principles)
+
+本文件定義本專案（專櫃水電抄表自動化系統）之核心資安、開發流程、防呆鐵律與維護規範，所有 Agent 與開發人員必須嚴格遵守。
+
+---
+
+## 🌐 一、 語言原則 (Language Policy)
+1. **強制使用繁體中文（台灣）**：所有對使用者的說明、回應、分析、Plan、Task、Walkthrough 及專案文件，必須 100% 使用「繁體中文（台灣）」。
+2. **嚴禁簡體中文**：嚴格禁止出現任何簡體中文詞彙。
+3. **技術用語慣例**：優先使用台灣常用技術用語（如：程式碼、專案、伺服器、工作表、函式、陣列），程式碼、API 名稱、變數名稱及技術專有名詞可保留英文。
+
+---
+
+## 🔒 二、 核心資安與資料庫隔離守則 (Security & DB Isolation)
+1. **資料庫絕對隔離 (DB Isolation)**：
+   - 本專案所有開發、串接與測試，**僅限於指定的獨立副本試算表**（名稱：`每月專櫃試算表補登_app sheet使用`，ID 由環境屬性 `SPREADSHEET_ID` 載入）。
+   - **嚴禁碰觸或修改原始正式試算表**。
+2. **保護計費主表結構 (SSOT Protection)**：
+   - `def_水電軌道燈紀錄_Log` 為財務計費主檔，**嚴禁擅自增刪欄位、搬移位置或變更公式**。
+   - 主表僅由後端審核通過後的過帳程序更新度數（Col G: 220V, Col I: 110V, Col K: 水費）與本期抄表日（Col E: YYYY/M/D）。
+   - AppSheet 與前線拍照端嚴禁直接寫入主表，必須全數寫入暫存核對表 `抄表待審核_Queue`。
+3. **機密檔案零追蹤 (Zero Secret Leak)**：
+   - `.env`, `.env.*`, `*.pem`, `*.key`, `credentials.json`, `service_account*.json` 等敏感設定檔嚴禁納入 Git 追蹤。
+   - 程式碼中嚴禁硬編碼任何密碼、API 金鑰（如 Gemini API Key）或私密網址。
+
+---
+
+## 📜 三、 標準開發歷程與維護紀錄規範 (Standard History & Logging SOP)
+每次重大開發、架構演進或交接時，必須維護專案根目錄下的四份標準文件：
+1. `docs/PROJECT_CONVERSATION_HISTORY.md`（專案對話、架構決策與實施歷程紀錄）
+2. `PROGRESS.md`（系統開發進度、各階段里程碑與功能完成度對照表）
+3. `ISSUES_LOG.md`（踩坑記錄、問題排查與修復日誌）
+4. `PROJECT_HANDOVER.md`（專案交接手冊、環境變數需求與部署維運手冊）
+
+---
+
+## ⚡ 四、 Google Sheets、GAS 與 AppSheet 開發踩坑鐵律 (Lessons Learned)
+1. **Google Sheets 日期型別陷阱**：
+   - Google Sheets 會自動將 `YYYY-MM` 或日期字串轉為 JavaScript `Date` 物件。
+   - 在比對或格式化時，後端必須統一透過安全轉換（如 `Utilities.formatDate`）轉為純字串後再進行等值比較。
+2. **批次更新與資料防抹除機制**：
+   - 讀取組裝暫存表或主表度數時，必須使用防覆蓋檢驗，非空值才可寫入，防止空列或無效資料沖銷掉有效數據。
+3. **GAS Web App 通訊協定 (CORS & 302 Redirect)**：
+   - 外部或前端若需 POST 至 Google Apps Script，表頭建議使用 `application/x-www-form-urlencoded` 搭配 `redirect: 'follow'`，確保 100% 正常轉址與觸發 `doPost(e)`。
+4. **AppSheet 雙表解耦權限控管**：
+   - `抄表待審核_Queue`：開放 Adds, Updates, Reads（暫存操作區）。
+   - `def_水電軌道燈紀錄_Log`：在 AppSheet 中一律設定為「唯讀 (Read-Only)」，僅作為前期度數對照與專櫃清單參照，嚴禁開放直接編輯。
+
+---
+
+## 🛠️ 五、 儀表專業辨識與防呆規則 (Meter Reading Spec)
+1. **110V 機械電表 (大同 E-31)**：
+   - 黑色字輪為整數，最右側**紅色字輪框為小數點後第 1 位 (0.1)**，四捨五入取整數。
+   - 字輪若處於交界處（半字），以較小整數為準。
+2. **220V 集合式數位儀表 (士林電機 SPM-3)**：
+   - **單位防呆**：畫面必須有 `kWh` 字樣。若為 `V` (電壓)、`A` (電流)、`kW` (功率)，判定為無效輪播畫面，標註紅燈。
+3. **水表 (機械水量計 KC-20C)**：
+   - 僅讀取上方**黑色字輪**（立方公尺整數度數），下方紅色指針（小數）一律忽略。
+4. **度數逆轉防呆**：
+   - 若本期度數 < 前期度數（非合理歸零），系統必須標註紅燈警示，禁止直接過帳。

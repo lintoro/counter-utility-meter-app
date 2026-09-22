@@ -1,0 +1,49 @@
+# 機密與敏感設定檔 (Security & Credentials)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+client_secret*.json
+service_account*.json
+token.json
+.clasprc.json
+.clasp.json
+!.clasp.json.example
+
+# 本地開發與臨時測試腳本 (Local Scripts & Tools)
+scripts/
+downloaded_photos/
+scratch/
+
+# 本機照片與多媒體測試檔
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+
+# 依賴套件與打包產物 (Dependencies & Build)
+node_modules/
+dist/
+build/
+coverage/
+
+# 記錄與暫存 (Logs & Temp)
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 作業系統與 IDE 設定 (OS & IDE)
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
