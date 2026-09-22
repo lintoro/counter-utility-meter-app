@@ -76,3 +76,35 @@
   3. 將敏感 ID 與 API Key 透過雲端 `PropertiesService.getScriptProperties()` 私密儲存，GAS 代碼改為安全動態讀取。
   4. 健全 `.gitignore`，徹底排除 `.clasp.json`、`scripts/`、`downloaded_photos/` 及敏感憑證。
 - **狀態**：🟢 已解決 (Resolved)
+
+---
+
+### ISSUE-005: AppSheet 圖片顯示 ⚠️ 驚嘆號與按鈕彈出外部網頁問題
+- **發生日期**：2026-09-22 ~ 2026-09-23
+- **嚴重等級**：Medium（使用者體驗問題）
+- **錯誤現象**：
+  1. 在 AppSheet 介面中，`抄表待審核_Queue` 照片欄位呈現灰色 ⚠️ 驚嘆號圖示，無法渲染縮圖與點擊放大。
+  2. 點擊 AppSheet Action 按鈕會跳出外部 GAS 網頁（「AI 辨識已成功完成」），無法自動關閉。
+- **根因分析**：
+  1. Google Drive 照片預覽 URL 原先使用 `https://drive.google.com/uc?export=view&id=FILE_ID`，但在 AppSheet 嵌入時若檔案權限或 CDN 快取限制，會被瀏覽器安全標頭攔截。
+  2. Action 按鈕設為 `External: go to a website`，點擊即喚起新分頁。
+- **解決方案**：
+  1. 將 `Code.js` 生成之照片 URL 格式升級為 Google 官方高畫質直連 CDN 格式：`https://lh3.googleusercontent.com/d/FILE_ID`，並且提醒將 Google Drive 資料夾權限開啟為「知道連結的任何人皆可檢視」。
+  2. 將 AppSheet 動作按鈕或自動化改為 **`Call a webhook`** 或 **AppSheet Automation Bot**，讓 HTTP 請求 100% 在背景發送，實現無感原生體驗。
+- **狀態**：🟢 已解決 (Resolved)
+
+---
+
+### ISSUE-006: 專櫃主檔工作表名稱相容性與動態表頭對齊 (`def_櫃位主檔_Master`)
+- **發生日期**：2026-09-23
+- **嚴重等級**：High（影響已撤櫃/非主檔專櫃自動防呆結果）
+- **錯誤現象**：
+  後端原本寫死尋找 `櫃位主檔_Master` 工作表，但使用者實際資料庫之工作表名稱為 `def_櫃位主檔_Master`，且欄位為 `[專櫃編號, 位置, 專櫃名稱, 專櫃狀態...]`，導致後端全數進入未找到主檔之預設 fallback，防呆機制未起作用。
+- **根因分析**：
+  專案存在歷史命名差異（正式表皆有 `def_` 前綴，如 `def_水電軌道燈紀錄_Log`、`def_櫃位主檔_Master`），且 Column A 的標題名稱為 `專櫃編號`（而非 `專櫃代碼`）。
+- **解決方案**：
+  1. 更新 `Code.js` 中的 `CONFIG.SHEET_MASTER` 優先讀取 `def_櫃位主檔_Master`。
+  2. 重構 `checkCounterMasterStatus()` 函式，加入**智慧動態表頭對齊演算法**：動態尋找 `專櫃編號`/`專櫃代碼`、`專櫃名稱` 及 `專櫃狀態`/`撤櫃日期` 的 column index，確保不論欄位順序為何皆能 100% 精準對齊。
+  3. 透過 `clasp push` 與 `clasp deploy` 正式完成 Web App 版本升級 (Deployed @7)。
+- **狀態**：🟢 已解決 (Resolved)
+

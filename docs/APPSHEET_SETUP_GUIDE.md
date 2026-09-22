@@ -19,16 +19,19 @@
 
 ## 🗄️ 二、 資料表權限設定 (Data Tables)
 
-在 AppSheet 的 **Data > Tables** 載入以下兩張工作表：
+在 AppSheet 的 **Data > Tables** 載入以下三張工作表：
 
 | 資料表名稱 | 角色定位 | AppSheet 權限 (Table Mode) | 說明 |
 | :--- | :--- | :--- | :--- |
 | **`抄表待審核_Queue`** | 暫存核對表 (主要工作區) | **Adds, Updates, Deletes, Reads** | 供巡檢員檢視卡片、手動修改覆核度數與確認狀態 |
+| **`櫃位主檔_Master`** | 專櫃與撤櫃日期主檔 | **Adds, Updates, Reads** | 管理員維護專櫃清單、專櫃狀態與撤櫃日期 |
 | **`水電軌道燈紀錄_Log`** | 財務計費主表 (SSOT) | **Read-Only (唯讀)** | 僅供比對歷史前期度數，嚴禁前端直接編輯 |
 
 ---
 
-## 📊 三、 `抄表待審核_Queue` 欄位型態與公式設定 (Columns Schema)
+## 📊 三、 資料表欄位型態與公式設定 (Columns Schema)
+
+### 1. `抄表待審核_Queue`
 
 進入 **Data > Columns > 抄表待審核_Queue**，依序設定欄位屬性：
 
@@ -44,9 +47,21 @@
 | `AI辨識度數` | Number | ❌ | ❌ | 無 | ❌ | Gemini 辨識初值 |
 | `人工覆核度數` | Number | ❌ | ❌ | Initial: `[AI辨識度數]` | ✅ | **同仁手動修正欄位**（預設帶 AI 值） |
 | `本期用量` | Number | ❌ | ❌ | Formula: `[人工覆核度數] - [前期度數]` | ❌ | 自動計算當期耗用度數 |
-| `審核狀態` | Enum | ❌ | ❌ | Values: `待審核`, `正常`, `異常`, `已過帳` | ✅ | 預設為 `待審核` |
+| `審核狀態` | Enum | ❌ | ❌ | Values: `待審核`, `正常`, `異常`, `已過帳`, `已撤櫃` | ✅ | 預設為 `待審核` |
 | `審核備註` | LongText | ❌ | ❌ | 無 | ✅ | 記錄模型版本、警示訊息或人工備忘 |
 | `抄表員` | Text | ❌ | ❌ | Initial: `USEREMAIL()` | ❌ | 操作紀錄與追蹤 |
+
+### 2. `櫃位主檔_Master`
+
+進入 **Data > Columns > 櫃位主檔_Master**，設定專櫃與撤櫃日期屬性：
+
+| 欄位名稱 | Type | Key? | Label? | Formula / Initial Value | Editable? | 備註說明 |
+| :--- | :---: | :---: | :---: | :--- | :---: | :--- |
+| `專櫃代碼` | Text | ✅ | ❌ | 無 | ✅ | 專櫃唯一編號（如 `00066`） |
+| `專櫃名稱` | Text | ❌ | ✅ | 無 | ✅ | 專櫃名稱（如 `BAW`） |
+| `專櫃狀態` | Enum | ❌ | ❌ | Values: `在櫃`, `已撤櫃` | ✅ | 預設為 `在櫃` |
+| `撤櫃日期` | Date | ❌ | ❌ | 無 | ✅ | **撤櫃日期**（若未撤櫃請留空） |
+| `備註` | LongText | ❌ | ❌ | 無 | ✅ | 備註說明 |
 
 ---
 
@@ -114,7 +129,15 @@
   - **Main image shape**：`Square` (正方形便於看清表具與貼紙)
 - **Sort by**：`[審核狀態]` Descending, `[上傳時間]` Descending
 
-### 2. 歷史封存台：已過帳清單 (Table View)
+### 2. 專櫃主檔管理台 (Table View - 替換原本的 Statistics 視圖)
+- **說明**：若 AppSheet 預設建立了 `Statistics` 圖表視圖，可直接點擊該視圖並進行修改（或點右上角 🗑️ 刪除）。
+- **View Name**：`專櫃主檔` (可直接覆蓋原 `Statistics`)
+- **For this data**：`櫃位主檔_Master`
+- **View Type**：**Table** (表格) 或 **Deck** (卡片)
+- **Position**：`Menu` 或 `Primary`
+- **Display Icon**：`storefront` 或 `business`
+
+### 3. 歷史封存台：已過帳清單 (Table View)
 - **View Name**：`歷史過帳紀錄`
 - **For this data**：`抄表待審核_Queue`
 - **View Type**：**Table**

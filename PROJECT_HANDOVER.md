@@ -4,39 +4,44 @@
 
 ---
 
-## 📌 一、 專案核心資訊與目前成果
+## 📌 一、 專案核心資訊與最新開發成果 (2026-09-23 最新狀態)
 
 - **專案名稱**：Counter Utility Meter App (專櫃水電抄表自動化系統)
 - **GitHub 倉庫**：`https://github.com/lintoro/counter-utility-meter-app`
-- **架構特點**：
+- **系統最新版本**：**v4.1 專櫃主檔與撤櫃防呆正式部署版 (Deployed @7)**
+- **核心架構與功能亮點**：
   - **雙表解耦**：`抄表待審核_Queue`（操作暫存表） ↔ `水電軌道燈紀錄_Log`（財務計費主表 SSOT，唯讀保護）。
-  - **貼紙優先 OCR (SSOT)**：優先辨識表具制式貼紙（`| 專櫃代碼 | 專櫃名稱 | 儀表類別 |`），比對 202608 歷史真值 100% 精準吻合。
-  - **多模態 AI 辨識**：採用最新 `gemini-3.8-flash` / `gemini-3.6-flash`，具備 API 頻率保護與多模型降級容錯。
-  - **月結滾動機制**：一鍵從最新期本期度數無縫結轉為下期前期度數，並具備防空轉防呆。
-  - **AppSheet 手機端**：Deck View 卡片流已成功在手機實機運作，支援查看專櫃名稱、儀表類別、度數與手動覆核修改。
+  - **專櫃主檔智慧對齊 (`def_櫃位主檔_Master`)**：
+    - 後端自動探測並相容 `def_櫃位主檔_Master` 頁籤。
+    - 智慧定位 `專櫃編號` (Col A)、`專櫃名稱` (Col C) 與 `專櫃狀態` (Col D)，無需更動原始欄位。
+  - **雙重防呆過濾（已撤櫃 / 非主檔跳過辨識）**：
+    - **非主檔專櫃防呆**：照片專櫃未在 `def_櫃位主檔_Master` 中 ➔ **直接結束，跳過度數辨識**，標註 `異常` (`⚠️ [非主檔專櫃]`)。
+    - **已撤櫃專櫃防呆**：專櫃於 `def_櫃位主檔_Master` 狀態為 `已撤櫃` 或已過撤櫃日 ➔ **直接結束，跳過度數辨識**，標註 `已撤櫃` (`⚠️ [已撤櫃專櫃]`)。
+  - **AppSheet Automation Bot 背景 Webhook**：
+    - 成功建立並部署 AppSheet Bot (Adds ➔ POST JSON `{"action": "processPhotos", "limit": 5}`)。
+    - 巡檢員現場拍照上傳時，於背景無感發送 Webhook 觸發辨識並刷新卡片流，**完全不跳出瀏覽器**。
+  - **照片高畫質 CDN 縮圖網址**：
+    - 升級圖片產出格式為 Google 官方 CDN `https://lh3.googleusercontent.com/d/FILE_ID`，解決 AppSheet 驚嘆號 ⚠️ 無法載入與圖片放大問題。
 
 ---
 
-## 🛑 二、 本次交接斷點與接手工作 (Next Immediate Step)
+## 🛑 二、 本日開發斷點與接續手動測試工作 (Next Steps for Next Session)
 
-> **當前開發斷點**：
-> 已在 AppSheet 完成 `待審核清單` Deck View，正進入 **「Automation > Bots（自動化機器人）」** 設定，目標為打造 **「手機點擊按鈕時，在背景默默呼叫 Webhook，手機完全不跳出瀏覽器」** 的原生體驗。
+> **當前開發斷點 (2026-09-23 00:50)**：
+> **後端程式碼與雲端 Web App 微服務部署已 100% 推送生效 (Deployed @7)**。
+> 目前開發進度正處於 **「待同仁手動測試驗證 (Pending Manual Test)」** 階段。
 
-### 換機後接手第一件事：
-1. 打開 AppSheet 編輯畫面，點擊左側第 5 個小圖示 **【Automation 🤖】**。
-2. 進入剛才建立的 **`New Bot`**：
-   - **EVENT**：`抄表待審核_Queue` 資料異動。
-   - **PROCESS > Custom task**：選擇 **`Call a webhook`**。
-   - **Webhook URL**：填入 GAS 部署之 Web App URL。
-   - **HTTP Verb**：`POST`
-   - **Body Template**：
-     ```json
-     {
-       "action": "processPhotos",
-       "limit": 5
-     }
-     ```
-3. 存檔後，巡檢員在手機點擊按鈕，即可在背景完全不跳出網頁的情況下，完成 AI 辨識並自動更新卡片！
+### 下一次開工 / 接手第一優先事項：
+
+1. **實機照片手動測試與驗收 (Manual Test Verification)**：
+   - 準備或上傳 3 種情境之儀表照片至 Google Drive「待處理照片區」：
+     - **測試 A（正常營業專櫃）**：在上櫃清單內之專櫃照片 ➔ 驗證是否正常辨識貼紙、度數並計算本期用量。
+     - **測試 B（已撤櫃專櫃）**：於 `def_櫃位主檔_Master` 將某專櫃狀態改為 `已撤櫃` 或填入歷史撤櫃日期，拍攝該專櫃照片 ➔ 驗證是否自動標註 `已撤櫃` 且**度數留空、跳過辨識**。
+     - **測試 C（非主檔專櫃）**：拍攝不存在於 `def_櫃位主檔_Master` 中之專櫃照片 ➔ 驗證是否自動標註 `異常` (非主檔專櫃) 且**度數留空、跳過辨識**。
+
+2. **AppSheet `Statistics` 視圖整理與 `def_櫃位主檔_Master` 介面維護**：
+   - **方案 1 (推薦)**：在 AppSheet 載入 `def_櫃位主檔_Master` 資料表，將原本的 `Statistics` 圖表視圖修改名稱為 `專櫃主檔` (Table View)，作為管理員維護撤櫃日期的專屬畫面。
+   - **方案 2**：若無需圖表，直接於 AppSheet 的 **UX > Views** 中點選 `Statistics` 並點擊刪除 🗑️。
 
 ---
 
@@ -52,7 +57,7 @@ cd counter-utility-meter-app
 
 ### 2. 還原設定檔範本
 專案已內建安全範本，依資安規範真實設定檔不入 Git：
-- 複製 `.clasp.json.example` 為 `.clasp.json`，填入您的 `scriptId`。
+- `.clasp.json` 已自動建立並關聯至雲端腳本（`1_lt9B_comcSvTPEX1GhAwpUABJJd-ot4Ru6Ryb9L2UdREUA2cj3GWGbP`）。
 - 複製 `.env.example` 為 `.env`。
 
 ### 3. Google 帳號與 Clasp 授權
@@ -60,10 +65,7 @@ cd counter-utility-meter-app
 npm install -g @google/clasp
 clasp login
 ```
-登入具有試算表編輯權限之 Google 帳號即可與雲端雙向同步 (`clasp pull` / `clasp push`)。
-
-### 4. 雲端變數說明 (無痛換機)
-所有敏感資源 ID（試算表 ID、三大照片資料夾 ID、Gemini API Key）均已保存在 Google Apps Script 的雲端私有 **`ScriptProperties`（指令碼屬性）** 中。換機後**無需手動重新配置雲端變數**，後端代碼透過 `PropertiesService` 自動讀取！
+登入具有試算表編輯權限之 Google 帳號即可與雲端雙向同步 (`clasp pull` / `clasp push` / `clasp deploy`)。
 
 ---
 
@@ -71,5 +73,5 @@ clasp login
 
 1. **強制繁體中文（台灣）**：所有對話、註解、文件一律使用繁體中文。
 2. **資料庫絕對隔離**：僅能操作指定的開發副本試算表，嚴禁碰觸正式試算表。
-3. **主表結構保護**：計費主檔 `水電軌道燈紀錄_Log` 嚴禁增刪欄位與公式，度數回填僅透過審核過帳程序執行。
+3. **主表結構保護**：計費主檔 `水電軌道燈紀錄_Log` 與 `def_櫃位主檔_Master` 嚴禁任意抹除欄位，度數回填僅透過過帳程序執行。
 4. **機敏零洩漏**：`.gitignore` 嚴密防護，任何 API Key、私密 ID 絕不提交至 GitHub。

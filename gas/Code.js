@@ -15,7 +15,8 @@ const CONFIG = {
   SHEET_LOG: '水電軌道燈紀錄_Log',
   SHEET_LOG_ALT: 'def_水電軌道燈紀錄_Log',
   SHEET_QUEUE: '抄表待審核_Queue',
-  SHEET_MASTER: '櫃位主檔_Master',
+  SHEET_MASTER: 'def_櫃位主檔_Master',
+  SHEET_MASTER_ALT: '櫃位主檔_Master',
   GEMINI_MODELS: [
     'gemini-3.8-flash',
     'gemini-3.6-flash',
@@ -37,6 +38,13 @@ const CONFIG = {
     '審核狀態',
     '審核備註',
     '抄表員'
+  ],
+  MASTER_HEADERS: [
+    '專櫃代碼',
+    '專櫃名稱',
+    '專櫃狀態',
+    '撤櫃日期',
+    '備註'
   ]
 };
 
@@ -74,6 +82,7 @@ function onOpen() {
   ui.createMenu('⚡ 專櫃水電系統')
     .addItem('📅 一鍵生成下期主表骨架 (月結滾動)', 'menuInitNextMonth')
     .addSeparator()
+    .addItem('🏢 初始化/檢查專櫃主檔 (Master)', 'menuInitMasterSheet')
     .addItem('🛠️ 初始化/檢查暫存表 (Queue)', 'menuInitQueueSheet')
     .addItem('🧹 清空暫存表 (保留表頭)', 'menuClearQueue')
     .addItem('🔍 檢測試算表結構健康狀態', 'menuCheckStatus')
@@ -81,6 +90,65 @@ function onOpen() {
     .addItem('🤖 啟動 AI 影像辨識 (批次處理待處理照片)', 'menuTriggerAiOcr')
     .addItem('📤 一鍵過帳合格度數至主表', 'menuPostVerifiedToLog')
     .addToUi();
+}
+
+function menuInitMasterSheet() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    const res = initMasterSheet();
+    ui.alert('專櫃主檔初始化', res.message, ui.ButtonSet.OK);
+  } catch (err) {
+    ui.alert('初始化失敗', '錯誤訊息：' + err.message, ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * 建立或初始化「櫃位主檔_Master」工作表
+ */
+function initMasterSheet() {
+  const ss = getAppSpreadsheet();
+  let sheet = ss.getSheetByName(CONFIG.SHEET_MASTER);
+  let isCreated = false;
+
+  if (!sheet) {
+    sheet = ss.insertSheet(CONFIG.SHEET_MASTER);
+    isCreated = true;
+  }
+
+  const expectedHeaders = CONFIG.MASTER_HEADERS;
+  sheet.getRange(1, 1, 1, expectedHeaders.length).setValues([expectedHeaders]);
+
+  const headerRange = sheet.getRange(1, 1, 1, expectedHeaders.length);
+  headerRange
+    .setBackground('#0f172a')
+    .setFontColor('#f8fafc')
+    .setFontWeight('bold')
+    .setHorizontalAlignment('center')
+    .setVerticalAlignment('middle');
+  sheet.setRowHeight(1, 36);
+  sheet.setFrozenRows(1);
+
+  const colWidths = {
+    1: 120, // 專櫃代碼
+    2: 180, // 專櫃名稱
+    3: 120, // 專櫃狀態
+    4: 140, // 撤櫃日期
+    5: 220  // 備註
+  };
+
+  Object.keys(colWidths).forEach(function(colIndex) {
+    sheet.setColumnWidth(Number(colIndex), colWidths[colIndex]);
+  });
+
+  return {
+    success: true,
+    created: isCreated,
+    sheetName: CONFIG.SHEET_MASTER,
+    headers: expectedHeaders,
+    message: isCreated
+      ? '成功新建「' + CONFIG.SHEET_MASTER + '」工作表，包含 5 項標準欄位！'
+      : '專櫃主檔「' + CONFIG.SHEET_MASTER + '」已存在，已完成格式化與表頭維護！'
+  };
 }
 
 function menuInitNextMonth() {
@@ -651,6 +719,113 @@ function callGeminiVisionApi(imageBlob, apiKey) {
 }
 
 /**
+ * 檢查專櫃於主檔中的狀態與撤櫃日期 (支援 def_櫃位主檔_Master 表頭動態對齊)
+ */
+function checkCounterMasterStatus(counterCode, counterName, checkDate) {
+  try {
+    const ss = getAppSpreadsheet();
+    let masterSheet = ss.getSheetByName(CONFIG.SHEET_MASTER) || ss.getSheetByName(CONFIG.SHEET_MASTER_ALT);
+    if (!masterSheet) {
+      Logger.log('專櫃主檔工作表不存在');
+      return { isMasterFound: true, isRetired: false, retireDate: '', status: '在櫃' };
+    }
+
+    const lastRow = masterSheet.getLastRow();
+    const lastCol = masterSheet.getLastColumn();
+    if (lastRow <= 1) {
+      return { isMasterFound: true, isRetired: false, retireDate: '', status: '在櫃' };
+    }
+
+    // 1. 動態解析表頭欄位位置 (Index 0-based)
+    const headers = masterSheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    let colCodeIdx = -1;
+    let colNameIdx = -1;
+    let colStatusIdx = -1;
+    let colRetireDateIdx = -1;
+
+    for (let c = 0; c < headers.length; c++) {
+      const hStr = String(headers[c]).trim();
+      if (hStr === '專櫃編號' || hStr === '專櫃代碼' || hStr === '櫃位編號') {
+        colCodeIdx = c;
+      } else if (hStr === '專櫃名稱' || hStr === '櫃位名稱') {
+        colNameIdx = c;
+      } else if (hStr === '專櫃狀態' || hStr === '狀態' || hStr === '營運狀態') {
+        colStatusIdx = c;
+      } else if (hStr === '撤櫃日期' || hStr === '退櫃日期' || hStr === '結束日期') {
+        colRetireDateIdx = c;
+      }
+    }
+
+    // 若未找到則帶入預設位置 (0:編號, 2:名稱, 3:狀態)
+    if (colCodeIdx === -1) colCodeIdx = 0;
+    if (colNameIdx === -1) colNameIdx = headers.length >= 3 ? 2 : 1;
+    if (colStatusIdx === -1) colStatusIdx = headers.length >= 4 ? 3 : -1;
+
+    const data = masterSheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+    const targetCodeNum = parseInt(counterCode, 10);
+    const targetDate = checkDate ? new Date(checkDate) : new Date();
+
+    for (let i = 0; i < data.length; i++) {
+      const row = data[i];
+      const code = String(row[colCodeIdx]).trim();
+      const name = colNameIdx !== -1 ? String(row[colNameIdx]).trim() : '';
+      const status = colStatusIdx !== -1 ? String(row[colStatusIdx]).trim() : '';
+      const retireDateRaw = colRetireDateIdx !== -1 ? row[colRetireDateIdx] : (colStatusIdx !== -1 ? row[colStatusIdx] : null);
+
+      const codeNum = parseInt(code, 10);
+
+      const codeMatch = counterCode && (code === counterCode || (!isNaN(targetCodeNum) && codeNum === targetCodeNum));
+      const nameMatch = counterName && (name && (name.indexOf(counterName) !== -1 || counterName.indexOf(name) !== -1));
+
+      if (codeMatch || nameMatch) {
+        let isRetired = false;
+        let retireDateStr = '';
+
+        if (status === '已撤櫃' || status === '撤櫃' || status === '停業') {
+          isRetired = true;
+        }
+
+        if (retireDateRaw) {
+          if (retireDateRaw instanceof Date) {
+            retireDateStr = Utilities.formatDate(retireDateRaw, 'GMT+8', 'yyyy-MM-dd');
+            if (targetDate >= retireDateRaw) {
+              isRetired = true;
+            }
+          } else {
+            retireDateStr = String(retireDateRaw).trim();
+            if (retireDateStr && retireDateStr !== '已撤櫃' && retireDateStr !== '在櫃') {
+              const rDate = new Date(retireDateStr);
+              if (!isNaN(rDate.getTime()) && targetDate >= rDate) {
+                isRetired = true;
+              }
+            }
+          }
+        }
+
+        return {
+          isMasterFound: true,
+          isRetired: isRetired,
+          retireDate: retireDateStr,
+          status: status || (isRetired ? '已撤櫃' : '在櫃'),
+          masterCode: code,
+          masterName: name
+        };
+      }
+    }
+
+    return {
+      isMasterFound: false,
+      isRetired: false,
+      retireDate: '',
+      status: '未在主檔'
+    };
+  } catch (e) {
+    Logger.log('檢查專櫃主檔失敗: ' + e.message);
+    return { isMasterFound: true, isRetired: false, retireDate: '', status: '未知' };
+  }
+}
+
+/**
  * 輔助：從主表中查找專櫃前期度數 (優先使用專櫃代碼 counterCode 比對)
  */
 function lookupPreviousReading(counterCode, counterName, meterType) {
@@ -751,35 +926,54 @@ function processPendingMeterPhotos(limit, apiKeyOverride) {
       const effectiveCode = ocrResult.counter_code || '';
       const effectiveName = ocrResult.counter_name || parsedCounterName || '未知專櫃';
       const meterType = ocrResult.meter_type || '未知';
-      const reading = ocrResult.reading !== undefined ? ocrResult.reading : '';
-      const isValid = !!ocrResult.is_valid_reading;
 
-      const lookup = lookupPreviousReading(effectiveCode, effectiveName, meterType);
-      const prevReading = lookup.previousReading;
-      const finalCode = lookup.counterCode || effectiveCode;
-      const finalName = lookup.counterName || effectiveName;
+      // 執行專櫃主檔與撤櫃日期防呆校驗
+      const masterCheck = checkCounterMasterStatus(effectiveCode, effectiveName, file.getDateCreated());
 
+      let reading = '';
+      let prevReading = 0;
       let usage = '';
       let status = '待審核';
       let notes = ocrResult.notes || '';
+      let finalCode = effectiveCode;
+      let finalName = effectiveName;
 
-      if (isValid && reading !== '') {
-        usage = Number(reading) - Number(prevReading);
-        if (usage < 0) {
-          status = '異常';
-          notes = '⚠️ 度數逆轉防呆警示：本期度數 (' + reading + ') 小於前期度數 (' + prevReading + ')！ ' + notes;
-        } else {
-          status = '待審核';
-          notes = '【' + (ocrResult.used_model || 'gemini') + ' 辨識】' + notes;
-        }
-      } else {
+      if (!masterCheck.isMasterFound) {
+        // 防呆一：不在專櫃主檔，直接結束，不讀度數
         status = '異常';
-        notes = '⚠️ 辨識異常：' + notes;
+        notes = '⚠️ [非主檔專櫃] 專櫃代碼/名稱 [' + (effectiveCode || effectiveName) + '] 未存在於櫃位主檔中，跳過度數辨識！';
+      } else if (masterCheck.isRetired) {
+        // 防呆二：已經撤櫃，直接結束，不讀度數
+        status = '已撤櫃';
+        notes = '⚠️ [已撤櫃專櫃] 專櫃 [' + (masterCheck.masterName || effectiveName) + '] 已於 ' + (masterCheck.retireDate || '指定日期') + ' 撤櫃，跳过度數辨識！';
+      } else {
+        // 正常營業中專櫃：讀取度數與計算用量
+        reading = ocrResult.reading !== undefined ? ocrResult.reading : '';
+        const isValid = !!ocrResult.is_valid_reading;
+
+        const lookup = lookupPreviousReading(effectiveCode, effectiveName, meterType);
+        prevReading = lookup.previousReading;
+        finalCode = lookup.counterCode || effectiveCode;
+        finalName = lookup.counterName || effectiveName;
+
+        if (isValid && reading !== '') {
+          usage = Number(reading) - Number(prevReading);
+          if (usage < 0) {
+            status = '異常';
+            notes = '⚠️ 度數逆轉防呆警示：本期度數 (' + reading + ') 小於前期度數 (' + prevReading + ')！ ' + notes;
+          } else {
+            status = '待審核';
+            notes = '【' + (ocrResult.used_model || 'gemini') + ' 辨識】' + notes;
+          }
+        } else {
+          status = '異常';
+          notes = '⚠️ 辨識異常：' + notes;
+        }
       }
 
       const recordId = 'REC-' + Utilities.formatDate(new Date(), 'GMT+8', 'yyyyMMddHHmmss') + '-' + count;
       const uploadTime = Utilities.formatDate(file.getDateCreated(), 'GMT+8', 'yyyy-MM-dd HH:mm:ss');
-      const photoUrl = 'https://drive.google.com/uc?export=view&id=' + fileId;
+      const photoUrl = 'https://lh3.googleusercontent.com/d/' + fileId;
 
       const rowData = [
         recordId,
