@@ -10,9 +10,11 @@
 - **GitHub 倉庫**：`https://github.com/lintoro/counter-utility-meter-app`
 - **專案名稱**：Counter Utility Meter App (專櫃水電抄表自動化系統)
 - **GitHub 倉庫**：`https://github.com/lintoro/counter-utility-meter-app`
-- **系統最新版本**：**v5.9 零等待非同步背景辨識與極速連續批次上傳版 (Deployed @25)**
+- **系統最新版本**：**v6.0 最新期過帳鎖定防呆與歷史數據校正版 (Deployed @26)**
 - **核心架構與功能亮點**：
   - **雙表解耦**：`抄表待審核_Queue`（操作暫存表） ↔ `水電軌道燈紀錄_Log`（財務計費主表 SSOT，唯讀保護）。
+  - **過帳最新期鎖定防呆 (Latest YearMonth Strict Guard)**：
+    - 一鍵過帳程序自動鎖定主表最新期（如 `202609`），強制合格度數 100% 寫入最新期對應欄位，杜絕循序比對誤竄改歷史期別（如 `202607`）。
   - **一站式極速批次上傳與零等待背景 AI 辨識 (RWD 網頁)**：
     - 手機端支援一次多選照片/連續拍照，電腦端支援拖曳多圖。
     - 前端 HTML5 Canvas 智能等比壓縮：將 8MB~12MB 原始大圖縮小至 1600px、JPEG 82%，傳輸體積暴減 90%（350KB~500KB），單張上傳僅需 0.2~0.5 秒。

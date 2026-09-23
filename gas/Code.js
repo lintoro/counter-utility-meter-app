@@ -1346,7 +1346,7 @@ function fixPhotosPermissionsAndUrls() {
 }
 
 /**
- * 一鍵過帳：將合格度數自 Queue 回填至主表
+ * 一鍵過帳：將合格度數自 Queue 回填至主表（嚴格過帳至最新期，防呆保護歷史月份）
  */
 function postVerifiedReadingsToLog() {
   const ss = getAppSpreadsheet();
@@ -1365,6 +1365,15 @@ function postVerifiedReadingsToLog() {
   const qData = queueSheet.getRange(2, 1, qLastRow - 1, CONFIG.QUEUE_HEADERS.length).getValues();
   const logData = logSheet.getRange(2, 1, logSheet.getLastRow() - 1, 11).getValues();
   
+  // 核心防呆：定位主表中最新一期年月 (例如 202609)
+  let latestYm = '';
+  for (let j = logData.length - 1; j >= 0; j--) {
+    const ym = String(logData[j][0]).trim();
+    if (ym && (!latestYm || ym > latestYm)) {
+      latestYm = ym;
+    }
+  }
+
   let postedCount = 0;
   const todayStr = Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/M/d');
 
@@ -1377,7 +1386,11 @@ function postVerifiedReadingsToLog() {
     const meterType = qRow[5];
 
     if (status !== '異常' && status !== '已過帳' && verifiedReading !== '') {
-      for (let j = 0; j < logData.length; j++) {
+      // 關鍵修復：由後往前搜尋最新期 (latestYm) 專櫃，絕對不竄改歷史月份！
+      for (let j = logData.length - 1; j >= 0; j--) {
+        const ym = String(logData[j][0]).trim();
+        if (latestYm && ym !== latestYm) continue;
+
         const lCode = String(logData[j][1]).trim();
         const lName = String(logData[j][2]).trim();
 
@@ -1425,8 +1438,53 @@ function postVerifiedReadingsToLog() {
 
   return {
     success: true,
+    targetYearMonth: latestYm,
     postedCount: postedCount,
-    message: '成功將 ' + postedCount + ' 筆合格度數回填至主表，並已自待審核清單中自動移出！'
+    message: '成功將 ' + postedCount + ' 筆合格度數回填至主表最新期 [' + latestYm + ']，並已自待審核清單中自動移出！'
+  };
+}
+
+/**
+ * 一次性修復：還原歷史被誤寫的 202607 迷你米特度數，並正確回填至 202609
+ */
+function fixMiniMeterHistoryData() {
+  const ss = getAppSpreadsheet();
+  let logSheet = ss.getSheetByName(CONFIG.SHEET_LOG) || ss.getSheetByName(CONFIG.SHEET_LOG_ALT);
+  if (!logSheet) throw new Error('主表不存在');
+
+  const lastRow = logSheet.getLastRow();
+  const logData = logSheet.getRange(2, 1, lastRow - 1, 11).getValues();
+
+  let repaired202607 = false;
+  let updated202609 = false;
+
+  for (let j = 0; j < logData.length; j++) {
+    const ym = String(logData[j][0]).trim();
+    const code = String(logData[j][1]).trim();
+    const name = String(logData[j][2]).trim();
+
+    if (code === '00094' || name === '迷你米特' || parseInt(code, 10) === 94) {
+      const targetRow = j + 2;
+      if (ym === '202607') {
+        // 還原 202607 歷史真值：110V 本期度數應為 1419，抄表日為 2026/7/31
+        logSheet.getRange(targetRow, 5).setValue('2026/7/31');
+        logSheet.getRange(targetRow, 9).setValue(1419);
+        repaired202607 = true;
+      } else if (ym === '202609') {
+        // 正確填入 202609 本期最新度數：1435，抄表日為今日
+        const todayStr = Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/M/d');
+        logSheet.getRange(targetRow, 5).setValue(todayStr);
+        logSheet.getRange(targetRow, 9).setValue(1435);
+        updated202609 = true;
+      }
+    }
+  }
+
+  return {
+    success: true,
+    repaired202607: repaired202607,
+    updated202609: updated202609,
+    message: '迷你米特度數已完全校正：202607 還原為 1419，202609 成功寫入 1435！'
   };
 }
 
@@ -1590,6 +1648,8 @@ function doGet(e) {
       responseData = fixPhotosPermissionsAndUrls();
     } else if (action === 'dedupQueue') {
       responseData = deduplicateQueueSheet();
+    } else if (action === 'fixMiniMeter') {
+      responseData = fixMiniMeterHistoryData();
     } else if (action === 'getPhotoBase64' && e.parameter.fileId) {
       const file = DriveApp.getFileById(e.parameter.fileId);
       const b64 = Utilities.base64Encode(file.getBlob().getBytes());
