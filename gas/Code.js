@@ -2018,9 +2018,19 @@ function renderBatchUploadPage() {
         </h3>
         <div id="resultList"></div>
       </div>
-      <a href="appsheet://" class="btn-return">📱 立即返回 AppSheet 審核</a>
+      
+      <!-- 雙按鈕選項：繼續上傳 vs 上傳完成 -->
+      <div style="display:flex; flex-direction:column; gap:12px;">
+        <button id="btnContinue" class="btn-action" style="background:#3b82f6;">
+          🔄 繼續上傳更多照片（清空重選）
+        </button>
+        <button id="btnFinish" class="btn-return" style="background:#10b981; border:none; cursor:pointer;">
+          ✅ 上傳完成（返回 AppSheet 審核）
+        </button>
+      </div>
+
       <p style="font-size:13px; color:#94a3b8; text-align:center;">
-        💡 提示：若手機未自動切回，請點擊上方綠色按鈕或直接滑動切換回 AppSheet 即可！
+        💡 提示：點擊「上傳完成」將自動切換回 AppSheet，或請直接滑動手機手勢切換回應用程式！
       </p>
     </div>
   </div>
@@ -2038,6 +2048,9 @@ function renderBatchUploadPage() {
     const statusText = document.getElementById('statusText');
     const resultSection = document.getElementById('resultSection');
     const resultList = document.getElementById('resultList');
+    const uploadSection = document.getElementById('uploadSection');
+    const btnContinue = document.getElementById('btnContinue');
+    const btnFinish = document.getElementById('btnFinish');
 
     let selectedFiles = [];
 
@@ -2109,20 +2122,45 @@ function renderBatchUploadPage() {
       renderThumbnails();
     });
 
-    // 檔案轉 Base64
-    function fileToBase64(file) {
+    // 智能壓縮縮圖引擎 (限制長邊 1600px、JPEG 82%、體積暴減 90%)
+    function compressAndResizeImage(file, maxWidth = 1600, maxHeight = 1600, quality = 0.82) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => {
-          const b64 = reader.result.split(',')[1];
-          resolve(b64);
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            let w = img.width;
+            let h = img.height;
+            // 等比例縮小計算
+            if (w > h) {
+              if (w > maxWidth) {
+                h = Math.round((h * maxWidth) / w);
+                w = maxWidth;
+              }
+            } else {
+              if (h > maxHeight) {
+                w = Math.round((w * maxHeight) / h);
+                h = maxHeight;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+            // 輸出輕量高清晰度 JPEG Base64
+            const dataUrl = canvas.toDataURL('image/jpeg', quality);
+            resolve(dataUrl.split(',')[1]);
+          };
+          img.onerror = reject;
+          img.src = e.target.result;
         };
         reader.onerror = reject;
         reader.readAsDataURL(file);
       });
     }
 
-    // 開始上傳與辨識
+    // 開始批次壓縮、上傳與辨識
     startBtn.addEventListener('click', async () => {
       if (selectedFiles.length === 0) return;
 
@@ -2131,18 +2169,19 @@ function renderBatchUploadPage() {
       const total = selectedFiles.length;
       let uploadedCount = 0;
 
-      // 階段一：逐一上傳到待處理資料夾
+      // 階段一：逐一壓縮並上傳到待處理資料夾
       for (let i = 0; i < total; i++) {
         const file = selectedFiles[i];
-        statusText.innerText = '正在上傳照片 (' + (i + 1) + '/' + total + '): ' + file.name;
+        statusText.innerText = '⚡ 智能縮圖壓縮並上傳 (' + (i + 1) + '/' + total + '): ' + file.name;
         progressFill.style.width = Math.round(((i + 1) / total) * 50) + '%';
 
         try {
-          const b64 = await fileToBase64(file);
+          // 在前端記憶體瞬間縮小尺寸至 1600px
+          const b64 = await compressAndResizeImage(file, 1600, 1600, 0.82);
           const payload = {
             action: 'uploadPhotoSingle',
-            fileName: file.name,
-            mimeType: file.type || 'image/jpeg',
+            fileName: file.name.replace(/\\.[^/.]+$/, "") + ".jpg",
+            mimeType: 'image/jpeg',
             base64Data: b64
           };
           const res = await fetch(window.location.href, {
@@ -2151,12 +2190,12 @@ function renderBatchUploadPage() {
           });
           uploadedCount++;
         } catch (err) {
-          console.error('上傳照片失敗: ', err);
+          console.error('壓縮或上傳照片失敗: ', err);
         }
       }
 
       // 階段二：呼叫 Gemini AI 批次辨識
-      statusText.innerText = '🚀 上傳完成！Gemini 3.8 Flash 正在進行 AI 影像辨識...';
+      statusText.innerText = '🚀 照片已全部秒速上傳！Gemini 3.8 Flash 正在進行 AI 影像辨識...';
       progressFill.style.width = '75%';
 
       try {
@@ -2180,7 +2219,7 @@ function renderBatchUploadPage() {
     });
 
     function showResults(results) {
-      document.getElementById('uploadSection').style.display = 'none';
+      uploadSection.style.display = 'none';
       progressSection.style.display = 'none';
       resultSection.style.display = 'flex';
 
@@ -2198,12 +2237,29 @@ function renderBatchUploadPage() {
           resultList.appendChild(div);
         });
       }
-
-      // 2 秒後自動嘗試返回 AppSheet
-      setTimeout(() => {
-        try { window.location.href = 'appsheet://'; } catch (e) {}
-      }, 2000);
     }
+
+    // 按鈕 A：繼續上傳（清空圖片並回到選圖畫面）
+    btnContinue.addEventListener('click', () => {
+      selectedFiles = [];
+      fileInput.value = '';
+      renderThumbnails();
+      startBtn.disabled = false;
+      progressFill.style.width = '0%';
+      statusText.innerText = '準備上傳中...';
+      resultSection.style.display = 'none';
+      progressSection.style.display = 'none';
+      uploadSection.style.display = 'flex';
+    });
+
+    // 按鈕 B：上傳完成（切換回 AppSheet 應用程式或關閉）
+    btnFinish.addEventListener('click', () => {
+      try { window.location.href = 'appsheet://'; } catch (e) {}
+      setTimeout(() => {
+        try { window.close(); } catch (e) {}
+        try { history.back(); } catch (e) {}
+      }, 500);
+    });
   </script>
 </body>
 </html>`;
