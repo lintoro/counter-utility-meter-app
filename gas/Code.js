@@ -87,10 +87,21 @@ function onOpen() {
     .addItem('🧹 清空暫存表 (保留表頭)', 'menuClearQueue')
     .addItem('🔍 檢測試算表結構健康狀態', 'menuCheckStatus')
     .addItem('🖼️ 一鍵修復照片存取權限與縮圖網址', 'menuFixPhotos')
+    .addItem('🛡️ 一鍵清理暫存表重複卡片 (去重防呆)', 'menuDedupQueue')
     .addSeparator()
     .addItem('🤖 啟動 AI 影像辨識 (批次處理待處理照片)', 'menuTriggerAiOcr')
     .addItem('📤 一鍵過帳合格度數至主表', 'menuPostVerifiedToLog')
     .addToUi();
+}
+
+function menuDedupQueue() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    const res = deduplicateQueueSheet();
+    ui.alert('去重清理完成', res.message, ui.ButtonSet.OK);
+  } catch (err) {
+    ui.alert('清理失敗', '錯誤訊息：' + err.message, ui.ButtonSet.OK);
+  }
 }
 
 function menuFixPhotos() {
@@ -896,7 +907,144 @@ function lookupPreviousReading(counterCode, counterName, meterType) {
 }
 
 /**
- * 批次處理待處理資料夾中的照片
+ * 從字串或網址中解析 Google Drive 檔案 ID
+ */
+function extractDriveFileId(str) {
+  if (!str) return '';
+  const s = String(str).trim();
+  const m1 = s.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (m1) return m1[1];
+  const m2 = s.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (m2) return m2[1];
+  const m3 = s.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (m3) return m3[1];
+  if (/^[a-zA-Z0-9_-]{25,}$/.test(s)) return s;
+  return '';
+}
+
+/**
+ * 安全搬移檔案至目標資料夾，並確保從來源資料夾移除（雙重保證清空）
+ */
+function safeMoveFile(file, targetFolder, sourceFolder) {
+  if (!file || !targetFolder) return;
+  try {
+    file.moveTo(targetFolder);
+  } catch (e) {
+    try {
+      targetFolder.addFile(file);
+      if (sourceFolder) {
+        sourceFolder.removeFile(file);
+      }
+    } catch (err) {
+      Logger.log('移檔失敗: ' + err.message);
+    }
+  }
+  // 雙重驗證確保來源資料夾不留存
+  if (sourceFolder) {
+    try {
+      sourceFolder.removeFile(file);
+    } catch (e2) {}
+  }
+}
+
+/**
+ * 清理並去重「抄表待審核_Queue」工作表
+ * 1. 刪除所有全空白幽靈列
+ * 2. 針對尚未過帳（待審核、異常）且相同 (專櫃+儀表類別) 或相同照片的卡片，僅保留最新一筆，清除歷史重複
+ */
+function deduplicateQueueSheet() {
+  const ss = getAppSpreadsheet();
+  const queueSheet = ss.getSheetByName(CONFIG.SHEET_QUEUE);
+  if (!queueSheet) return { success: false, message: 'Queue 表不存在' };
+
+  const lastRow = queueSheet.getLastRow();
+  const numCols = CONFIG.QUEUE_HEADERS.length;
+  if (lastRow <= 1) return { success: true, remainingCount: 0, duplicateCount: 0, blankCount: 0, message: 'Queue 表無資料需清理' };
+
+  const values = queueSheet.getRange(2, 1, lastRow - 1, numCols).getValues();
+
+  const cleanRows = [];
+  const seenBusinessKeys = new Map(); // busKey -> cleanRows index
+  const seenPhotoIds = new Map();     // fileId -> cleanRows index
+
+  let blankCount = 0;
+  let duplicateCount = 0;
+
+  for (let i = 0; i < values.length; i++) {
+    const row = values[i];
+    const recId = String(row[0] || '').trim();
+    const photoUrl = String(row[2] || '').trim();
+    const code = String(row[3] || '').trim();
+    const name = String(row[4] || '').trim();
+    const meterType = String(row[5] || '').trim();
+    const status = String(row[10] || '').trim();
+
+    // 檢查是否為空行
+    const isBlank = !recId && !photoUrl && !code && !name;
+    if (isBlank) {
+      blankCount++;
+      continue;
+    }
+
+    const fileId = extractDriveFileId(photoUrl);
+
+    // 若已經過帳，直接保留歷史過帳紀錄
+    if (status === '已過帳' || status === '已核准') {
+      cleanRows.push(row);
+      continue;
+    }
+
+    // 業務去重鍵值 (專櫃代碼或名稱 + 儀表類別)
+    const busKey = (code ? code : name) + '::' + meterType;
+
+    // 檢查是否有同照片重複
+    if (fileId && seenPhotoIds.has(fileId)) {
+      const existingIdx = seenPhotoIds.get(fileId);
+      cleanRows[existingIdx] = row;
+      duplicateCount++;
+      continue;
+    }
+
+    // 檢查是否有同櫃位同儀表類別待審核重複
+    if (busKey !== '::' && busKey !== '未知::未知' && seenBusinessKeys.has(busKey)) {
+      const existingIdx = seenBusinessKeys.get(busKey);
+      cleanRows[existingIdx] = row;
+      duplicateCount++;
+      if (fileId) seenPhotoIds.set(fileId, existingIdx);
+      continue;
+    }
+
+    // 記錄新列
+    const currentIdx = cleanRows.length;
+    cleanRows.push(row);
+    if (busKey !== '::' && busKey !== '未知::未知') {
+      seenBusinessKeys.set(busKey, currentIdx);
+    }
+    if (fileId) {
+      seenPhotoIds.set(fileId, currentIdx);
+    }
+  }
+
+  // 清空資料區並重寫
+  queueSheet.getRange(2, 1, lastRow, numCols).clearContent();
+  if (cleanRows.length > 0) {
+    queueSheet.getRange(2, 1, cleanRows.length, numCols).setValues(cleanRows);
+  }
+
+  const msg = 'Queue 表去重清洗完成！保留 ' + cleanRows.length + ' 筆，清除 ' + duplicateCount + ' 筆重複卡片及 ' + blankCount + ' 筆空行。';
+  Logger.log(msg);
+
+  return {
+    success: true,
+    remainingCount: cleanRows.length,
+    duplicateCount: duplicateCount,
+    blankCount: blankCount,
+    message: msg
+  };
+}
+
+/**
+ * 批次處理待處理資料夾中的照片（具備三大去重防呆：照片去重、業務 Upsert 覆蓋更新、移檔保證）
  */
 function processPendingMeterPhotos(limit, apiKeyOverride) {
   const apiKey = apiKeyOverride || PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
@@ -914,9 +1062,24 @@ function processPendingMeterPhotos(limit, apiKeyOverride) {
   let count = 0;
 
   const ss = getAppSpreadsheet();
-  const queueSheet = ss.getSheetByName(CONFIG.SHEET_QUEUE);
+  let queueSheet = ss.getSheetByName(CONFIG.SHEET_QUEUE);
   if (!queueSheet) {
     initQueueSheet();
+    queueSheet = ss.getSheetByName(CONFIG.SHEET_QUEUE);
+  }
+
+  // 1. 讀取現有 Queue 表，建立已存在照片 File ID 索引與業務列比對快照
+  let lastRow = queueSheet.getLastRow();
+  let queueData = [];
+  const existingPhotoIds = new Set();
+
+  if (lastRow > 1) {
+    queueData = queueSheet.getRange(2, 1, lastRow - 1, CONFIG.QUEUE_HEADERS.length).getValues();
+    for (let r = 0; r < queueData.length; r++) {
+      const pUrl = String(queueData[r][2] || '').trim();
+      const pFid = extractDriveFileId(pUrl);
+      if (pFid) existingPhotoIds.add(pFid);
+    }
   }
 
   while (files.hasNext() && count < maxItems) {
@@ -924,6 +1087,18 @@ function processPendingMeterPhotos(limit, apiKeyOverride) {
     const fileName = file.getName();
     const fileId = file.getId();
     count++;
+
+    // 防呆機制一：照片等級去重。若照片 File ID 已存在於 Queue 表中，直接歸檔跳過！
+    if (existingPhotoIds.has(fileId)) {
+      Logger.log('照片 [' + fileName + '] 已存在於待審核暫存表，執行安全歸檔並略過！');
+      safeMoveFile(file, archivedFolder, pendingFolder);
+      processed.push({
+        fileName: fileName,
+        status: '已略過',
+        notes: '照片已在待審核表中，自動歸檔免重複辨識'
+      });
+      continue;
+    }
 
     try {
       file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
@@ -986,32 +1161,84 @@ function processPendingMeterPhotos(limit, apiKeyOverride) {
         }
       }
 
-      const recordId = 'REC-' + Utilities.formatDate(new Date(), 'GMT+8', 'yyyyMMddHHmmss') + '-' + count;
       const uploadTime = Utilities.formatDate(file.getDateCreated(), 'GMT+8', 'yyyy-MM-dd HH:mm:ss');
       const photoUrl = 'https://lh3.googleusercontent.com/d/' + fileId;
 
-      const rowData = [
-        recordId,
-        uploadTime,
-        photoUrl,
-        finalCode,
-        finalName,
-        meterType,
-        prevReading,
-        reading,
-        reading,
-        usage,
-        status,
-        notes,
-        'AI自動辨識'
-      ];
+      // 防呆機制二：業務維度 Upsert。比對 Queue 中是否已有同櫃同表別之「待審核」或「異常」記錄
+      let matchedRowIdx = -1;
+      for (let r = 0; r < queueData.length; r++) {
+        const qRow = queueData[r];
+        const qCode = String(qRow[3] || '').trim();
+        const qName = String(qRow[4] || '').trim();
+        const qMeter = String(qRow[5] || '').trim();
+        const qStatus = String(qRow[10] || '').trim();
 
-      queueSheet.appendRow(rowData);
+        const isSameCounter = (finalCode && qCode && String(finalCode) === qCode) ||
+                              (finalName && qName && finalName === qName);
+        const isSameMeter = (meterType && qMeter && meterType === qMeter);
+        const isUnfinalized = (qStatus === '待審核' || qStatus === '異常');
 
-      if (status === '異常') {
-        file.moveTo(reviewFolder);
+        if (isSameCounter && isSameMeter && isUnfinalized) {
+          matchedRowIdx = r;
+          break;
+        }
+      }
+
+      let recordId = '';
+      if (matchedRowIdx !== -1) {
+        // 【就地覆蓋更新 (In-place Upsert)】更新既有列，避免重複產生多張卡片！
+        const sheetRowNum = matchedRowIdx + 2;
+        recordId = String(queueData[matchedRowIdx][0]);
+        notes = '【更新覆蓋最新照片】' + notes;
+
+        // 更新試算表單列資料
+        queueSheet.getRange(sheetRowNum, 2).setValue(uploadTime);
+        queueSheet.getRange(sheetRowNum, 3).setValue(photoUrl);
+        queueSheet.getRange(sheetRowNum, 4).setValue(finalCode);
+        queueSheet.getRange(sheetRowNum, 5).setValue(finalName);
+        queueSheet.getRange(sheetRowNum, 6).setValue(meterType);
+        queueSheet.getRange(sheetRowNum, 7).setValue(prevReading);
+        queueSheet.getRange(sheetRowNum, 8).setValue(reading);
+        queueSheet.getRange(sheetRowNum, 9).setValue(reading);
+        queueSheet.getRange(sheetRowNum, 10).setValue(usage);
+        queueSheet.getRange(sheetRowNum, 11).setValue(status);
+        queueSheet.getRange(sheetRowNum, 12).setValue(notes);
+        queueSheet.getRange(sheetRowNum, 13).setValue('AI自動辨識');
+
+        // 同步更新記憶體快照
+        queueData[matchedRowIdx] = [
+          recordId, uploadTime, photoUrl, finalCode, finalName, meterType,
+          prevReading, reading, reading, usage, status, notes, 'AI自動辨識'
+        ];
       } else {
-        file.moveTo(archivedFolder);
+        // 【新增列】
+        recordId = 'REC-' + Utilities.formatDate(new Date(), 'GMT+8', 'yyyyMMddHHmmss') + '-' + count;
+        const rowData = [
+          recordId,
+          uploadTime,
+          photoUrl,
+          finalCode,
+          finalName,
+          meterType,
+          prevReading,
+          reading,
+          reading,
+          usage,
+          status,
+          notes,
+          'AI自動辨識'
+        ];
+        queueSheet.appendRow(rowData);
+        queueData.push(rowData);
+      }
+
+      existingPhotoIds.add(fileId);
+
+      // 防呆機制三：移檔雙重保證
+      if (status === '異常') {
+        safeMoveFile(file, reviewFolder, pendingFolder);
+      } else {
+        safeMoveFile(file, archivedFolder, pendingFolder);
       }
 
       processed.push({
@@ -1023,6 +1250,7 @@ function processPendingMeterPhotos(limit, apiKeyOverride) {
         reading: reading,
         usage: usage,
         status: status,
+        actionType: (matchedRowIdx !== -1) ? '覆蓋更新既有卡片' : '新增待審核卡片',
         notes: notes,
         model: ocrResult.used_model
       });
@@ -1032,7 +1260,7 @@ function processPendingMeterPhotos(limit, apiKeyOverride) {
 
     } catch (e) {
       Logger.log('處理照片失敗 (' + fileName + '): ' + e.message);
-      file.moveTo(reviewFolder);
+      safeMoveFile(file, reviewFolder, pendingFolder);
       processed.push({
         fileName: fileName,
         error: e.message,
@@ -1336,6 +1564,8 @@ function doGet(e) {
       responseData = postVerifiedReadingsToLog();
     } else if (action === 'fixPhotos') {
       responseData = fixPhotosPermissionsAndUrls();
+    } else if (action === 'dedupQueue') {
+      responseData = deduplicateQueueSheet();
     } else if (action === 'getPhotoBase64' && e.parameter.fileId) {
       const file = DriveApp.getFileById(e.parameter.fileId);
       const b64 = Utilities.base64Encode(file.getBlob().getBytes());
@@ -1359,7 +1589,7 @@ function doGet(e) {
     };
   }
 
-  const isUserInteractiveAction = (action === 'processPhotos' || action === 'postVerified' || action === 'initNextMonth');
+  const isUserInteractiveAction = (action === 'processPhotos' || action === 'postVerified' || action === 'initNextMonth' || action === 'dedupQueue');
 
   if (!isUserInteractiveAction || (e && e.parameter && e.parameter.format === 'json')) {
     return ContentService.createTextOutput(JSON.stringify(responseData, null, 2))
@@ -1442,6 +1672,8 @@ function doPost(e) {
       responseData = initQueueSheet();
     } else if (action === 'clearQueue') {
       responseData = clearQueueSheet();
+    } else if (action === 'dedupQueue') {
+      responseData = deduplicateQueueSheet();
     } else if (action === 'status') {
       responseData = getSpreadsheetStatus();
     } else {

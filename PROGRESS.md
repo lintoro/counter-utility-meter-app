@@ -15,7 +15,9 @@
 | **階段 3.5** | **月結滾動機制 (一鍵生成下期主表骨架)** | 🟢 已完成 | 實作 `initializeNextMonthLog()`，支援自動將最新期本期度數結轉為下期前期度數，並具備防空轉防呆 |
 | **階段 4** | **一鍵過帳程序 (Queue -> 主表 Log)** | 🟢 已完成 | 實作 `postVerifiedReadingsToLog()`，合格度數回填至主表，並掛載試算表專屬快捷選單 |
 | **階段 5** | **AppSheet 介面優化與 Webhook 雙向串接** | 🟢 已完成 | 支援 `doPost` Webhook、AppSheet Automation Bot 背景發送、專櫃主檔 Schema 設定、照片縮圖 URL 優化與單筆重新辨識 API |
-| **階段 6** | **全流程整合測試與正式上線驗收** | 🟢 進行中 | 完成 AppSheet Bot 背景呼叫與專櫃主檔防呆升級，端到端拍照 ➔ AI 辨識 ➔ 滑動審核 ➔ 過帳測試進行中 |
+| **階段 5.5** | **縮圖預覽修復與前端雙動線分流** | 🟢 已完成 | 照片權限自動公開 + 升級 Google lh3 CDN 解決灰色驚嘆號；前端分流【📷 批次拍照上傳】與【➕ 單筆拍照補登】雙動線 |
+| **階段 5.6** | **自動識別三大去重防呆與歷史資料清洗** | 🟢 已完成 | 實作照片 File ID 去重、同櫃同表 In-place Upsert 覆蓋更新、移檔雙重保證；提供 `deduplicateQueueSheet` 清洗歷史重複卡片 |
+| **階段 6** | **全流程整合測試與正式上線驗收** | 🟢 進行中 | 後端防呆與清洗已完成，待使用者執行全流程（拍照 ➔ AI 辨識 ➔ 滑動審核 ➔ 過帳）端到端手動測試 |
 
 ---
 
@@ -45,6 +47,13 @@
 
 ### 階段 5：AppSheet 前端優化與雙向串接
 - [x] 撰寫並發布支援 AppSheet Webhook 的 `doPost(e)` 接口，支援 POST JSON / UrlEncoded 呼叫
-- [x] 優化照片預覽 URL 格式為 `https://drive.google.com/uc?export=view&id=`，確保 AppSheet 縮圖正常載入
+- [x] 優化照片預覽 URL 格式為 `https://lh3.googleusercontent.com/d/FILE_ID`，解決縮圖灰色驚嘆號
 - [x] 實作單筆記錄 AI 重新辨識端點 (`processSingleQueueRecord`)
-- [x] 產出專屬前端配置指南 [`docs/APPSHEET_SETUP_GUIDE.md`](docs/APPSHEET_SETUP_GUIDE.md)（涵蓋欄位型別、公式、Deck View、紅綠燈 Format Rules 與 5 大 Actions）
+- [x] 產出專屬前端配置指南 [`docs/APPSHEET_SETUP_GUIDE.md`](docs/APPSHEET_SETUP_GUIDE.md)
+
+### 階段 5.5 & 5.6：雙動線分流與三大去重防呆
+- [x] AppSheet 前端雙動線分流：【📷 批次拍照上傳】（開啟雲端資料夾一次選多張）與【➕ 單筆拍照補登】（表單單張即時填寫）
+- [x] 照片等級去重防呆：比對已存在之照片 File ID，自動歸檔並跳過，不重複辨識、不耗費額度
+- [x] 業務維度 In-place Upsert 防呆：同專櫃+同儀表類別就地更新原列（度數、照片、用量），標註【更新覆蓋最新照片】，保證 AppSheet 介面永遠只有一張最新卡片，不再產生重複要求核可的雙胞胎卡片
+- [x] 移檔雙重保證：`safeMoveFile()` 確保照片移出待處理資料夾，徹底杜絕迭代器重複讀取
+- [x] 歷史重複資料清洗：實施 `deduplicateQueueSheet()`，一鍵清除歷史重複卡片與空白幽靈列，暫存表完全淨化！
