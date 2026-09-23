@@ -10,15 +10,20 @@
 - **GitHub 倉庫**：`https://github.com/lintoro/counter-utility-meter-app`
 - **專案名稱**：Counter Utility Meter App (專櫃水電抄表自動化系統)
 - **GitHub 倉庫**：`https://github.com/lintoro/counter-utility-meter-app`
-- **系統最新版本**：**v4.5 三大去重防呆與暫存表清洗版 (Deployed @19)**
+- **系統最新版本**：**v5.8 極速批次上傳、Canvas 智能壓縮與 google.script.run 原生 RPC 版 (Deployed @24)**
 - **核心架構與功能亮點**：
   - **雙表解耦**：`抄表待審核_Queue`（操作暫存表） ↔ `水電軌道燈紀錄_Log`（財務計費主表 SSOT，唯讀保護）。
+  - **一站式極速批次上傳與 AI 辨識 (RWD 網頁)**：
+    - 手機端支援一次多選照片/連續拍照，電腦端支援拖曳多圖。
+    - 前端 HTML5 Canvas 智能等比壓縮：將 8MB~12MB 原始大圖縮小至 1600px、JPEG 82%，傳輸體積暴減 90%（350KB~500KB）。
+    - 採用 Google Apps Script 官方原生 `google.script.run` RPC 機制，徹底根絕 CORS、302 重導向與 JSON 解析錯誤。
+    - 成果畫面提供【🔄 繼續上傳（清空圖片）】與【✅ 上傳完成（返回 AppSheet）】雙按鈕。
   - **自動識別三大去重防呆 (Triple Idempotency Guard)**：
     - **照片 File ID 去重**：已在 Queue 中的照片自動安全歸檔跳過，不重複辨識、不耗費 Gemini 額度。
     - **業務維度 In-place Upsert**：同櫃位同儀表類別就地更新原列（度數、照片、用量），標註【更新覆蓋最新照片】，保證 AppSheet 介面永遠只有一張最新卡片，徹底消除雙胞胎卡片。
     - **實體移檔保證**：`safeMoveFile()` 確保照片 100% 移出 `pendingFolder`，消除殘留與重複讀取。
   - **前端雙動線分流**：
-    - 【📷 批次拍照上傳】：綁定 Google Drive 待處理資料夾深層連結，支援現場一次挑選多張儀表照片整批上傳。
+    - 【📷 批次拍照上傳】：綁定極速批次上傳網頁（`?action=uploadView`），支援現場一次挑選多張儀表照片整批壓縮上傳與自動辨識。
     - 【➕ 單筆拍照補登】：保留 AppSheet 預設加號表單，供特殊單筆補登使用。
   - **照片高畫質 CDN 縮圖網址**：
     - 升級圖片產出格式為 Google 官方 CDN `https://lh3.googleusercontent.com/d/FILE_ID`，解決 AppSheet 驚嘆號 ⚠️ 無法載入與圖片放大問題。

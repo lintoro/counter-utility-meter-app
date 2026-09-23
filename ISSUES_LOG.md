@@ -127,3 +127,26 @@
   3. 實作 `safeMoveFile()`：雙重保證移出來源資料夾，清空 `pendingFolder`。
   4. 實作 `deduplicateQueueSheet()` 去重清理函式，並提供試算表選單與 API 端點 `?action=dedupQueue`，實機執行一次性成功清理 5 筆重複卡片及 2 筆空行，暫存表恢復 12 筆乾淨唯一紀錄。
 - **狀態**：🟢 已解決 (Resolved)
+
+---
+
+### ISSUE-008: 批次上傳網頁出現 Unexpected token '<', "<!doctype "... is not valid JSON 異常
+- **發生日期**：2026-09-23
+- **嚴重等級**：High（阻斷一站式批次上傳與 AI 辨識頁面執行）
+- **錯誤現象**：
+  在 RWD 批次上傳網頁中，選取多張照片並點擊【🚀 開始批次上傳與 AI 辨識】後，進度條跑到底出現紅色警示：
+  `⚠️ 辨識過程中遇到提示：Unexpected token '<', "<!doctype "... is not valid JSON`。
+- **根因分析**：
+  1. Google Apps Script 的 HtmlService 在前端是運行在 `googleusercontent.com` 的 iframe 沙盒內部。
+  2. 原前端代碼使用 `fetch(window.location.href, { method: 'POST', body: ... })` 試圖呼叫自身，但目標 URL 並非合法的 GAS Web App 端點，被 Google 伺服器拒絕並回傳包含 `<!doctype html...>` 的錯誤網頁（或經歷 302 重導向與 CORS 預檢失敗）。
+  3. 前端以 `await res.json()` 解析該 HTML 錯誤頁面時，JSON 解析器在第一個字元遇到 `<` 即拋出語法解析錯誤。
+- **解決方案**：
+  1. **遷移至 GAS 原生通訊機制**：捨棄不可靠的 `fetch()`，全面導入 Google Apps Script 官方專屬的 `google.script.run` RPC 通訊。
+  2. 在後端 `Code.js` 定義獨立 RPC 函式 `saveUploadedPhoto(fileName, mimeType, base64Data)`，負責接收前端 Canvas 壓縮後的 Base64 輕量圖片並寫入待處理資料夾。
+  3. 前端封裝 `callGasServer(funcName, ...args)` Promise 函式：
+     - 階段一：逐一壓縮並呼叫 `callGasServer('saveUploadedPhoto', ...)`。
+     - 階段二：呼叫 `callGasServer('processPendingMeterPhotos', count)` 直接獲得原生 JavaScript 物件。
+  4. 徹底消除 HTTP/POST/CORS/302 重導向與 iframe 網址偏移問題，傳輸穩定極速，成果卡片流暢渲染。
+  5. 透過 `clasp push` 與 `clasp deploy` 正式部署至版本 `@24`。
+- **狀態**：🟢 已解決 (Resolved)
+

@@ -1703,22 +1703,7 @@ function doPost(e) {
     } else if (action === 'status') {
       responseData = getSpreadsheetStatus();
     } else if (action === 'uploadPhotoSingle') {
-      const fName = params.fileName || ('meter_' + new Date().getTime() + '.jpg');
-      const mType = params.mimeType || 'image/jpeg';
-      const b64 = params.base64Data || '';
-      if (!b64) throw new Error('缺少 base64Data 照片內容');
-      const pendingFolder = getAppFolder('pending');
-      const blob = Utilities.newBlob(Utilities.base64Decode(b64), mType, fName);
-      const file = pendingFolder.createFile(blob);
-      try {
-        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      } catch (se) {}
-      responseData = {
-        success: true,
-        fileId: file.getId(),
-        fileName: fName,
-        message: '照片成功存入待處理區'
-      };
+      responseData = saveUploadedPhoto(params.fileName, params.mimeType, params.base64Data);
     } else {
       responseData = {
         success: false,
@@ -1735,6 +1720,29 @@ function doPost(e) {
 
   return ContentService.createTextOutput(JSON.stringify(responseData, null, 2))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * 儲存單張上傳照片至待處理資料夾 (供前端 google.script.run RPC 或內部調用)
+ */
+function saveUploadedPhoto(fileName, mimeType, base64Data) {
+  const fName = fileName || ('meter_' + new Date().getTime() + '.jpg');
+  const mType = mimeType || 'image/jpeg';
+  if (!base64Data) throw new Error('缺少 base64Data 照片內容');
+  const pendingFolder = getAppFolder('pending');
+  const blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mType, fName);
+  const file = pendingFolder.createFile(blob);
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (se) {
+    Logger.log('設定公開分享失敗 (' + fName + '): ' + se.message);
+  }
+  return {
+    success: true,
+    fileId: file.getId(),
+    fileName: fName,
+    message: '照片成功存入待處理區'
+  };
 }
 
 /**
@@ -2160,6 +2168,23 @@ function renderBatchUploadPage() {
       });
     }
 
+    // 透過 Google Apps Script 原生 RPC 呼叫後端函式，杜絕 CORS 與 HTML 回傳問題
+    function callGasServer(funcName, ...args) {
+      return new Promise((resolve, reject) => {
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run
+            .withSuccessHandler((result) => resolve(result))
+            .withFailureHandler((error) => {
+              const msg = error ? (error.message || String(error)) : '伺服器端發生未知錯誤';
+              reject(new Error(msg));
+            })
+            [funcName](...args);
+        } else {
+          reject(new Error('google.script.run 執行環境不可用'));
+        }
+      });
+    }
+
     // 開始批次壓縮、上傳與辨識
     startBtn.addEventListener('click', async () => {
       if (selectedFiles.length === 0) return;
@@ -2176,42 +2201,33 @@ function renderBatchUploadPage() {
         progressFill.style.width = Math.round(((i + 1) / total) * 50) + '%';
 
         try {
-          // 在前端記憶體瞬間縮小尺寸至 1600px
+          // 在前端記憶體瞬間縮小尺寸至 1600px，JPEG 0.82
           const b64 = await compressAndResizeImage(file, 1600, 1600, 0.82);
-          const payload = {
-            action: 'uploadPhotoSingle',
-            fileName: file.name.replace(/\\.[^/.]+$/, "") + ".jpg",
-            mimeType: 'image/jpeg',
-            base64Data: b64
-          };
-          const res = await fetch(window.location.href, {
-            method: 'POST',
-            body: JSON.stringify(payload)
-          });
+          const fName = file.name.replace(/\\.[^/.]+$/, "") + ".jpg";
+          await callGasServer('saveUploadedPhoto', fName, 'image/jpeg', b64);
           uploadedCount++;
         } catch (err) {
           console.error('壓縮或上傳照片失敗: ', err);
+          statusText.innerText = '⚠️ 上傳第 ' + (i + 1) + ' 張照片時遇到提示：' + err.message;
         }
       }
 
+      if (uploadedCount === 0) {
+        statusText.innerText = '⚠️ 照片未能成功上傳，請稍候再試！';
+        startBtn.disabled = false;
+        return;
+      }
+
       // 階段二：呼叫 Gemini AI 批次辨識
-      statusText.innerText = '🚀 照片已全部秒速上傳！Gemini 3.8 Flash 正在進行 AI 影像辨識...';
+      statusText.innerText = '🚀 已成功上傳 ' + uploadedCount + ' 張照片！Gemini 3.8 Flash 正在進行 AI 影像辨識...';
       progressFill.style.width = '75%';
 
       try {
-        const ocrPayload = {
-          action: 'processPhotos',
-          limit: total
-        };
-        const ocrRes = await fetch(window.location.href, {
-          method: 'POST',
-          body: JSON.stringify(ocrPayload)
-        });
-        const ocrData = await ocrRes.json();
+        const ocrData = await callGasServer('processPendingMeterPhotos', uploadedCount);
         progressFill.style.width = '100%';
         statusText.innerText = '✅ 全部辨識完成！';
 
-        showResults(ocrData.results || []);
+        showResults((ocrData && ocrData.results) || []);
       } catch (err) {
         statusText.innerText = '⚠️ 辨識過程中遇到提示：' + err.message;
         progressFill.style.width = '100%';

@@ -129,3 +129,12 @@
       - **防呆二（業務維度 In-place Upsert）**：針對相同專櫃、相同儀表類別且尚未過帳之卡片，直接就地覆蓋更新度數、照片、用量與備註，標記【更新覆蓋最新照片】，保證 AppSheet 畫面永遠只有一張最新卡片，徹底消除雙胞胎卡片。
       - **防呆三（移檔雙重保證）**：撰寫 `safeMoveFile()` 確保照片 100% 移出 `pendingFolder`，消除殘留與重複讀取。
       - **歷史髒資料清洗**：實作 `deduplicateQueueSheet()`，線上成功清除 5 筆重複卡片及 2 筆空行，暫存表完全淨化為 12 筆乾淨記錄！
+13. **一站式極速批次上傳、前端 Canvas 智能壓縮與完成雙按鈕 (v5.7)**：
+    - 打造響應式 RWD 上傳頁面（`?action=uploadView`），支援手機連續拍照多選上傳與電腦拖曳上傳。
+    - 導入前端 HTML5 Canvas 智能等比壓縮演算法：將手機 8MB~12MB 大圖在記憶體中縮小至 1600px、JPEG 82%，傳輸體積暴減 90%（縮至 350KB~500KB）。
+    - 辨識成果畫面提供【🔄 繼續上傳（清空圖片）】與【✅ 上傳完成（返回 AppSheet）】雙按鈕。
+14. **修復批次上傳 JSON 解析異常，全面遷移至 google.script.run 原生 RPC (v5.8)**：
+    - 排查使用者在批次上傳畫面遇到的 `Unexpected token '<', "<!doctype "... is not valid JSON` 錯誤。
+    - 診斷出因 GAS iframe 沙盒與 fetch POST 限制，全面重構前後端通訊為 Google Apps Script 官方標準 `google.script.run` RPC 機制。
+    - 新增後端 RPC 函式 `saveUploadedPhoto(fileName, mimeType, base64Data)`，前端透過 Promise 封裝無縫串聯壓縮上傳與 Gemini 3.8 Flash AI 辨識。
+    - 部署至正式版本 `@24`，徹底根絕 HTML 錯誤頁面與 JSON 解析失敗問題。
