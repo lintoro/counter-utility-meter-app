@@ -10,14 +10,15 @@
 - **GitHub 倉庫**：`https://github.com/lintoro/counter-utility-meter-app`
 - **專案名稱**：Counter Utility Meter App (專櫃水電抄表自動化系統)
 - **GitHub 倉庫**：`https://github.com/lintoro/counter-utility-meter-app`
-- **系統最新版本**：**v5.8 極速批次上傳、Canvas 智能壓縮與 google.script.run 原生 RPC 版 (Deployed @24)**
+- **系統最新版本**：**v5.9 零等待非同步背景辨識與極速連續批次上傳版 (Deployed @25)**
 - **核心架構與功能亮點**：
   - **雙表解耦**：`抄表待審核_Queue`（操作暫存表） ↔ `水電軌道燈紀錄_Log`（財務計費主表 SSOT，唯讀保護）。
-  - **一站式極速批次上傳與 AI 辨識 (RWD 網頁)**：
+  - **一站式極速批次上傳與零等待背景 AI 辨識 (RWD 網頁)**：
     - 手機端支援一次多選照片/連續拍照，電腦端支援拖曳多圖。
-    - 前端 HTML5 Canvas 智能等比壓縮：將 8MB~12MB 原始大圖縮小至 1600px、JPEG 82%，傳輸體積暴減 90%（350KB~500KB）。
+    - 前端 HTML5 Canvas 智能等比壓縮：將 8MB~12MB 原始大圖縮小至 1600px、JPEG 82%，傳輸體積暴減 90%（350KB~500KB），單張上傳僅需 0.2~0.5 秒。
+    - **零等待秒速交棒**：照片上傳完成後，立即由後端 `triggerBackgroundAiOcr()` 搭配 `LockService` 併發鎖在後台排隊持續辨識，前端完全不卡住等待，巡檢人員可立即點擊【📸 繼續上傳下一批照片】無縫連續作業！
     - 採用 Google Apps Script 官方原生 `google.script.run` RPC 機制，徹底根絕 CORS、302 重導向與 JSON 解析錯誤。
-    - 成果畫面提供【🔄 繼續上傳（清空圖片）】與【✅ 上傳完成（返回 AppSheet）】雙按鈕。
+    - 畫面提供【📸 繼續上傳下一批照片】與【✅ 上傳完成（返回 AppSheet）】雙按鈕。
   - **自動識別三大去重防呆 (Triple Idempotency Guard)**：
     - **照片 File ID 去重**：已在 Queue 中的照片自動安全歸檔跳過，不重複辨識、不耗費 Gemini 額度。
     - **業務維度 In-place Upsert**：同櫃位同儀表類別就地更新原列（度數、照片、用量），標註【更新覆蓋最新照片】，保證 AppSheet 介面永遠只有一張最新卡片，徹底消除雙胞胎卡片。

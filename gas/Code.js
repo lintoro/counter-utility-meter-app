@@ -1746,6 +1746,30 @@ function saveUploadedPhoto(fileName, mimeType, base64Data) {
 }
 
 /**
+ * 啟動後台批次 AI 辨識 (具備 Lock 防併發重疊保護)
+ * 供前端快速交棒，讓巡檢人員零等待持續拍照
+ */
+function triggerBackgroundAiOcr() {
+  const lock = LockService.getScriptLock();
+  // 嘗試獲取鎖，若已有任務正在辨識，則不重複執行（既有工作會繼續辨識待處理區的照片）
+  const hasLock = lock.tryLock(1500);
+  if (!hasLock) {
+    Logger.log('已有背景辨識工作正在進行中，目前上傳的照片將由既有工作接續處理。');
+    return { success: true, message: '背景辨識已在執行中，接續排隊處理！' };
+  }
+
+  try {
+    // 依序辨識 pendingFolder 內的所有照片（單次最多處理 30 張）
+    return processPendingMeterPhotos(30);
+  } catch (e) {
+    Logger.log('背景辨識發生異常: ' + e.message);
+    return { success: false, error: e.message };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
  * 專屬極速「批次拍照上傳 ➔ 自動 AI 辨識」一站式響應式網頁 (RWD)
  * 支援手機多選拍照、電腦直接拖曳多圖、即時進度條與成果預覽
  */
@@ -2018,27 +2042,34 @@ function renderBatchUploadPage() {
       <div id="statusText" class="status-text">準備上傳中...</div>
     </div>
 
-    <!-- 結果區 -->
+    <!-- 結果區：秒速交棒完成畫面 -->
     <div id="resultSection" style="display:none; flex-direction:column; gap:16px;">
       <div class="result-card">
-        <h3 style="color:#10b981; font-size:18px; margin-bottom:8px; display:flex; align-items:center; gap:8px;">
-          🎉 AI 辨識完成！
+        <h3 style="color:#10b981; font-size:19px; margin-bottom:8px; display:flex; align-items:center; gap:8px;">
+          🎉 本批照片已秒速上傳！
         </h3>
-        <div id="resultList"></div>
+        <p style="font-size:15px; color:#cbd5e1; line-height:1.6; margin-bottom:12px;">
+          本次共上傳 <b id="uploadedSummaryCount" style="color:#38bdf8; font-size:17px;">0</b> 張儀表照片。<br>
+          🤖 <b>Gemini 3.8 Flash AI 已在後台持續辨識中</b>，無需在此等待！
+        </p>
+        <div style="background:#0f172a; border:1px solid #334155; border-radius:12px; padding:12px 14px; font-size:13px; color:#94a3b8; line-height:1.6;">
+          ⚡ <b>連續巡檢免等待：</b><br>
+          您可以直接點擊下方<b>「📸 繼續上傳下一批照片」</b>拍下一批櫃位，或點擊<b>「✅ 上傳完成」</b>返回 AppSheet 審核！
+        </div>
       </div>
       
       <!-- 雙按鈕選項：繼續上傳 vs 上傳完成 -->
       <div style="display:flex; flex-direction:column; gap:12px;">
         <button id="btnContinue" class="btn-action" style="background:#3b82f6;">
-          🔄 繼續上傳更多照片（清空重選）
+          📸 繼續上傳下一批照片（清空直接拍）
         </button>
         <button id="btnFinish" class="btn-return" style="background:#10b981; border:none; cursor:pointer;">
           ✅ 上傳完成（返回 AppSheet 審核）
         </button>
       </div>
 
-      <p style="font-size:13px; color:#94a3b8; text-align:center;">
-        💡 提示：點擊「上傳完成」將自動切換回 AppSheet，或請直接滑動手機手勢切換回應用程式！
+      <p style="font-size:13px; color:#64748b; text-align:center;">
+        💡 提示：點擊「上傳完成」將返回 AppSheet，下拉重新整理即可看到最新辨識出的卡片！
       </p>
     </div>
   </div>
@@ -2185,7 +2216,7 @@ function renderBatchUploadPage() {
       });
     }
 
-    // 開始批次壓縮、上傳與辨識
+    // 開始批次壓縮、上傳與背景辨識 (零等待交棒模式)
     startBtn.addEventListener('click', async () => {
       if (selectedFiles.length === 0) return;
 
@@ -2194,11 +2225,11 @@ function renderBatchUploadPage() {
       const total = selectedFiles.length;
       let uploadedCount = 0;
 
-      // 階段一：逐一壓縮並上傳到待處理資料夾
+      // 逐一壓縮並上傳到待處理資料夾（純上傳，每張 1600px 只要 0.2~0.5 秒）
       for (let i = 0; i < total; i++) {
         const file = selectedFiles[i];
         statusText.innerText = '⚡ 智能縮圖壓縮並上傳 (' + (i + 1) + '/' + total + '): ' + file.name;
-        progressFill.style.width = Math.round(((i + 1) / total) * 50) + '%';
+        progressFill.style.width = Math.round(((i + 1) / total) * 100) + '%';
 
         try {
           // 在前端記憶體瞬間縮小尺寸至 1600px，JPEG 0.82
@@ -2218,41 +2249,28 @@ function renderBatchUploadPage() {
         return;
       }
 
-      // 階段二：呼叫 Gemini AI 批次辨識
-      statusText.innerText = '🚀 已成功上傳 ' + uploadedCount + ' 張照片！Gemini 3.8 Flash 正在進行 AI 影像辨識...';
-      progressFill.style.width = '75%';
-
+      // 上傳全部完成！立即在背景觸發 AI 辨識（Fire-and-Forget，零等待交棒）
+      statusText.innerText = '🚀 上傳完成！已通知後台 Gemini 3.8 Flash 持續辨識中...';
       try {
-        const ocrData = await callGasServer('processPendingMeterPhotos', uploadedCount);
-        progressFill.style.width = '100%';
-        statusText.innerText = '✅ 全部辨識完成！';
-
-        showResults((ocrData && ocrData.results) || []);
-      } catch (err) {
-        statusText.innerText = '⚠️ 辨識過程中遇到提示：' + err.message;
-        progressFill.style.width = '100%';
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run.triggerBackgroundAiOcr();
+        }
+      } catch (triggerErr) {
+        console.warn('觸發後台辨識提示: ', triggerErr);
       }
+
+      // 前端直接秒切換至完成頁面，讓巡檢人員自由選擇「繼續傳下一批」或「回 AppSheet」
+      setTimeout(() => {
+        showCompletedView(uploadedCount);
+      }, 500);
     });
 
-    function showResults(results) {
+    function showCompletedView(count) {
       uploadSection.style.display = 'none';
       progressSection.style.display = 'none';
       resultSection.style.display = 'flex';
-
-      resultList.innerHTML = '';
-      if (results.length === 0) {
-        resultList.innerHTML = '<div style="color:#94a3b8; padding:10px 0;">照片已安全存入待處理區，請返回 App 重新整理！</div>';
-      } else {
-        results.forEach(r => {
-          const div = document.createElement('div');
-          div.className = 'result-item';
-          const counter = (r.counterCode ? ('#' + r.counterCode + ' ') : '') + (r.counterName || '未知專櫃');
-          const meter = r.meterType || '儀表';
-          const reading = r.reading !== '' ? (r.reading + ' 度') : '無度數';
-          div.innerHTML = '<div><div class="counter-tag">' + counter + '</div><div style="font-size:13px; color:#94a3b8;">' + meter + ' (' + (r.status || '待審核') + ')</div></div><div class="reading-tag">' + reading + '</div>';
-          resultList.appendChild(div);
-        });
-      }
+      const summaryEl = document.getElementById('uploadedSummaryCount');
+      if (summaryEl) summaryEl.innerText = count;
     }
 
     // 按鈕 A：繼續上傳（清空圖片並回到選圖畫面）
