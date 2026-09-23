@@ -1540,7 +1540,13 @@ function processSingleQueueRecord(recordId, apiKeyOverride) {
  * Web API 閘道入口 (GET)
  */
 function doGet(e) {
-  const action = (e && e.parameter && e.parameter.action) || 'status';
+  const action = (e && e.parameter && e.parameter.action) || '';
+
+  // 專屬極速批次上傳與 AI 辨識頁面
+  if (action === 'uploadView' || action === 'upload') {
+    return renderBatchUploadPage();
+  }
+
   let responseData = {};
 
   try {
@@ -1696,6 +1702,23 @@ function doPost(e) {
       responseData = deduplicateQueueSheet();
     } else if (action === 'status') {
       responseData = getSpreadsheetStatus();
+    } else if (action === 'uploadPhotoSingle') {
+      const fName = params.fileName || ('meter_' + new Date().getTime() + '.jpg');
+      const mType = params.mimeType || 'image/jpeg';
+      const b64 = params.base64Data || '';
+      if (!b64) throw new Error('缺少 base64Data 照片內容');
+      const pendingFolder = getAppFolder('pending');
+      const blob = Utilities.newBlob(Utilities.base64Decode(b64), mType, fName);
+      const file = pendingFolder.createFile(blob);
+      try {
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      } catch (se) {}
+      responseData = {
+        success: true,
+        fileId: file.getId(),
+        fileName: fName,
+        message: '照片成功存入待處理區'
+      };
     } else {
       responseData = {
         success: false,
@@ -1712,4 +1735,480 @@ function doPost(e) {
 
   return ContentService.createTextOutput(JSON.stringify(responseData, null, 2))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * 專屬極速「批次拍照上傳 ➔ 自動 AI 辨識」一站式響應式網頁 (RWD)
+ * 支援手機多選拍照、電腦直接拖曳多圖、即時進度條與成果預覽
+ */
+function renderBatchUploadPage() {
+  const html = `<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>📸 專櫃水電抄表 - 極速批次上傳與 AI 辨識</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --card-border: #334155;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #10b981;
+      --danger: #ef4444;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+    }
+    .container {
+      width: 100%;
+      max-width: 680px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    header {
+      text-align: center;
+      padding: 12px 0;
+    }
+    header h1 {
+      font-size: 22px;
+      font-weight: 800;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    header p {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+    .dropzone {
+      background: var(--card-bg);
+      border: 2px dashed #475569;
+      border-radius: 20px;
+      padding: 32px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .dropzone.dragover {
+      border-color: var(--primary);
+      background: #1e293b80;
+      transform: scale(1.01);
+    }
+    .dropzone-icon {
+      font-size: 48px;
+    }
+    .dropzone-title {
+      font-size: 18px;
+      font-weight: bold;
+      color: #fff;
+    }
+    .dropzone-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .preview-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 8px;
+    }
+    .badge {
+      background: #334155;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      font-size: 13px;
+      font-weight: bold;
+      color: var(--primary);
+    }
+    .btn-clear {
+      background: transparent;
+      border: none;
+      color: var(--danger);
+      font-size: 13px;
+      cursor: pointer;
+      padding: 4px 8px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 12px;
+      max-height: 280px;
+      overflow-y: auto;
+      padding: 4px;
+    }
+    .grid-item {
+      position: relative;
+      background: #090d16;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid var(--card-border);
+      aspect-ratio: 1;
+    }
+    .grid-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .btn-del {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      background: rgba(0,0,0,0.6);
+      color: white;
+      border: none;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-action {
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 16px;
+      border-radius: 16px;
+      font-size: 17px;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+      transition: all 0.2s ease;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .btn-action:disabled {
+      background: #334155;
+      color: #64748b;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    .btn-return {
+      background: var(--success);
+      color: white;
+      text-decoration: none;
+      padding: 16px;
+      border-radius: 16px;
+      font-size: 17px;
+      font-weight: bold;
+      text-align: center;
+      display: block;
+      box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4);
+    }
+    .progress-box {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .progress-bar-bg {
+      background: #0f172a;
+      height: 12px;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      background: linear-gradient(90deg, var(--primary), var(--success));
+      height: 100%;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+    .status-text {
+      font-size: 14px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+    .result-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .result-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid #334155;
+    }
+    .result-item:last-child { border-bottom: none; }
+    .counter-tag {
+      font-weight: bold;
+      font-size: 15px;
+      color: #fff;
+    }
+    .reading-tag {
+      font-size: 15px;
+      font-weight: bold;
+      color: #38bdf8;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>⚡ 專櫃水電抄表自動化</h1>
+      <p>📸 極速批次上傳與 Gemini 3.8 Flash AI 辨識</p>
+    </header>
+
+    <!-- 上傳區 -->
+    <div id="uploadSection" class="container">
+      <div class="dropzone" id="dropArea">
+        <div class="dropzone-icon">📸</div>
+        <div class="dropzone-title">點此選取多張照片 / 連續拍照</div>
+        <div class="dropzone-desc">手機支援一次多選照片上傳<br>電腦端可直接將多張照片拖曳至此處</div>
+        <input type="file" id="fileInput" accept="image/*" multiple style="display:none;">
+      </div>
+
+      <div id="previewArea" style="display:none; flex-direction:column; gap:10px;">
+        <div class="preview-header">
+          <span class="badge">已選取 <span id="fileCount">0</span> 張照片</span>
+          <button class="btn-clear" id="clearBtn">清空重選</button>
+        </div>
+        <div class="grid" id="thumbnailGrid"></div>
+        <button id="startBtn" class="btn-action">🚀 開始批次上傳與 AI 辨識</button>
+      </div>
+    </div>
+
+    <!-- 進度區 -->
+    <div id="progressSection" class="progress-box" style="display:none;">
+      <div class="progress-bar-bg">
+        <div id="progressFill" class="progress-bar-fill"></div>
+      </div>
+      <div id="statusText" class="status-text">準備上傳中...</div>
+    </div>
+
+    <!-- 結果區 -->
+    <div id="resultSection" style="display:none; flex-direction:column; gap:16px;">
+      <div class="result-card">
+        <h3 style="color:#10b981; font-size:18px; margin-bottom:8px; display:flex; align-items:center; gap:8px;">
+          🎉 AI 辨識完成！
+        </h3>
+        <div id="resultList"></div>
+      </div>
+      <a href="appsheet://" class="btn-return">📱 立即返回 AppSheet 審核</a>
+      <p style="font-size:13px; color:#94a3b8; text-align:center;">
+        💡 提示：若手機未自動切回，請點擊上方綠色按鈕或直接滑動切換回 AppSheet 即可！
+      </p>
+    </div>
+  </div>
+
+  <script>
+    const dropArea = document.getElementById('dropArea');
+    const fileInput = document.getElementById('fileInput');
+    const previewArea = document.getElementById('previewArea');
+    const thumbnailGrid = document.getElementById('thumbnailGrid');
+    const fileCount = document.getElementById('fileCount');
+    const clearBtn = document.getElementById('clearBtn');
+    const startBtn = document.getElementById('startBtn');
+    const progressSection = document.getElementById('progressSection');
+    const progressFill = document.getElementById('progressFill');
+    const statusText = document.getElementById('statusText');
+    const resultSection = document.getElementById('resultSection');
+    const resultList = document.getElementById('resultList');
+
+    let selectedFiles = [];
+
+    dropArea.addEventListener('click', () => fileInput.click());
+
+    // 拖曳事件
+    ['dragenter', 'dragover'].forEach(name => {
+      dropArea.addEventListener(name, (e) => {
+        e.preventDefault();
+        dropArea.classList.add('dragover');
+      });
+    });
+    ['dragleave', 'drop'].forEach(name => {
+      dropArea.addEventListener(name, (e) => {
+        e.preventDefault();
+        dropArea.classList.remove('dragover');
+      });
+    });
+    dropArea.addEventListener('drop', (e) => {
+      const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+      handleFiles(files);
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      const files = Array.from(e.target.files);
+      handleFiles(files);
+    });
+
+    function handleFiles(files) {
+      if (!files || files.length === 0) return;
+      selectedFiles = selectedFiles.concat(files);
+      renderThumbnails();
+    }
+
+    function renderThumbnails() {
+      thumbnailGrid.innerHTML = '';
+      if (selectedFiles.length === 0) {
+        previewArea.style.display = 'none';
+        return;
+      }
+      previewArea.style.display = 'flex';
+      fileCount.innerText = selectedFiles.length;
+
+      selectedFiles.forEach((file, index) => {
+        const item = document.createElement('div');
+        item.className = 'grid-item';
+        
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(file);
+        
+        const btn = document.createElement('button');
+        btn.className = 'btn-del';
+        btn.innerHTML = '×';
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          selectedFiles.splice(index, 1);
+          renderThumbnails();
+        };
+
+        item.appendChild(img);
+        item.appendChild(btn);
+        thumbnailGrid.appendChild(item);
+      });
+    }
+
+    clearBtn.addEventListener('click', () => {
+      selectedFiles = [];
+      fileInput.value = '';
+      renderThumbnails();
+    });
+
+    // 檔案轉 Base64
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const b64 = reader.result.split(',')[1];
+          resolve(b64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    // 開始上傳與辨識
+    startBtn.addEventListener('click', async () => {
+      if (selectedFiles.length === 0) return;
+
+      startBtn.disabled = true;
+      progressSection.style.display = 'flex';
+      const total = selectedFiles.length;
+      let uploadedCount = 0;
+
+      // 階段一：逐一上傳到待處理資料夾
+      for (let i = 0; i < total; i++) {
+        const file = selectedFiles[i];
+        statusText.innerText = '正在上傳照片 (' + (i + 1) + '/' + total + '): ' + file.name;
+        progressFill.style.width = Math.round(((i + 1) / total) * 50) + '%';
+
+        try {
+          const b64 = await fileToBase64(file);
+          const payload = {
+            action: 'uploadPhotoSingle',
+            fileName: file.name,
+            mimeType: file.type || 'image/jpeg',
+            base64Data: b64
+          };
+          const res = await fetch(window.location.href, {
+            method: 'POST',
+            body: JSON.stringify(payload)
+          });
+          uploadedCount++;
+        } catch (err) {
+          console.error('上傳照片失敗: ', err);
+        }
+      }
+
+      // 階段二：呼叫 Gemini AI 批次辨識
+      statusText.innerText = '🚀 上傳完成！Gemini 3.8 Flash 正在進行 AI 影像辨識...';
+      progressFill.style.width = '75%';
+
+      try {
+        const ocrPayload = {
+          action: 'processPhotos',
+          limit: total
+        };
+        const ocrRes = await fetch(window.location.href, {
+          method: 'POST',
+          body: JSON.stringify(ocrPayload)
+        });
+        const ocrData = await ocrRes.json();
+        progressFill.style.width = '100%';
+        statusText.innerText = '✅ 全部辨識完成！';
+
+        showResults(ocrData.results || []);
+      } catch (err) {
+        statusText.innerText = '⚠️ 辨識過程中遇到提示：' + err.message;
+        progressFill.style.width = '100%';
+      }
+    });
+
+    function showResults(results) {
+      document.getElementById('uploadSection').style.display = 'none';
+      progressSection.style.display = 'none';
+      resultSection.style.display = 'flex';
+
+      resultList.innerHTML = '';
+      if (results.length === 0) {
+        resultList.innerHTML = '<div style="color:#94a3b8; padding:10px 0;">照片已安全存入待處理區，請返回 App 重新整理！</div>';
+      } else {
+        results.forEach(r => {
+          const div = document.createElement('div');
+          div.className = 'result-item';
+          const counter = (r.counterCode ? ('#' + r.counterCode + ' ') : '') + (r.counterName || '未知專櫃');
+          const meter = r.meterType || '儀表';
+          const reading = r.reading !== '' ? (r.reading + ' 度') : '無度數';
+          div.innerHTML = '<div><div class="counter-tag">' + counter + '</div><div style="font-size:13px; color:#94a3b8;">' + meter + ' (' + (r.status || '待審核') + ')</div></div><div class="reading-tag">' + reading + '</div>';
+          resultList.appendChild(div);
+        });
+      }
+
+      // 2 秒後自動嘗試返回 AppSheet
+      setTimeout(() => {
+        try { window.location.href = 'appsheet://'; } catch (e) {}
+      }, 2000);
+    }
+  </script>
+</body>
+</html>`;
+
+  return HtmlService.createHtmlOutput(html)
+    .setTitle('📸 專櫃水電抄表 - 批次上傳與辨識')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
