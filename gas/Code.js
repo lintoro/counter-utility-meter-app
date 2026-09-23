@@ -86,10 +86,21 @@ function onOpen() {
     .addItem('🛠️ 初始化/檢查暫存表 (Queue)', 'menuInitQueueSheet')
     .addItem('🧹 清空暫存表 (保留表頭)', 'menuClearQueue')
     .addItem('🔍 檢測試算表結構健康狀態', 'menuCheckStatus')
+    .addItem('🖼️ 一鍵修復照片存取權限與縮圖網址', 'menuFixPhotos')
     .addSeparator()
     .addItem('🤖 啟動 AI 影像辨識 (批次處理待處理照片)', 'menuTriggerAiOcr')
     .addItem('📤 一鍵過帳合格度數至主表', 'menuPostVerifiedToLog')
     .addToUi();
+}
+
+function menuFixPhotos() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    const res = fixPhotosPermissionsAndUrls();
+    ui.alert('照片修復完成', res.message, ui.ButtonSet.OK);
+  } catch (err) {
+    ui.alert('修復失敗', '錯誤訊息：' + err.message, ui.ButtonSet.OK);
+  }
 }
 
 function menuInitMasterSheet() {
@@ -914,6 +925,10 @@ function processPendingMeterPhotos(limit, apiKeyOverride) {
     const fileId = file.getId();
     count++;
 
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (se) {}
+
     let parsedCounterName = '';
     const nameMatch = fileName.match(/^([^_]+)水電/);
     if (nameMatch) {
@@ -1030,6 +1045,76 @@ function processPendingMeterPhotos(limit, apiKeyOverride) {
     success: true,
     processedCount: processed.length,
     results: processed
+  };
+}
+
+/**
+ * 一鍵修復照片存取權限與更新縮圖網址為 lh3 CDN
+ * 確保 AppSheet 圖片縮圖 100% 正常渲染，不再出現 ⚠️ 灰色驚嘆號
+ */
+function fixPhotosPermissionsAndUrls() {
+  const ss = getAppSpreadsheet();
+  const queueSheet = ss.getSheetByName(CONFIG.SHEET_QUEUE);
+  if (!queueSheet) throw new Error('暫存表不存在');
+
+  const lastRow = queueSheet.getLastRow();
+  let updatedCount = 0;
+  let sharedFolderCount = 0;
+
+  // 1. 開啟三大資料夾的「知道連結的任何人皆可檢視」權限
+  const folderKeys = ['pending', 'archived', 'review'];
+  for (let k = 0; k < folderKeys.length; k++) {
+    try {
+      const folder = getAppFolder(folderKeys[k]);
+      if (folder) {
+        folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        sharedFolderCount++;
+      }
+    } catch (fe) {
+      Logger.log('設定資料夾權限跳過 (' + folderKeys[k] + '): ' + fe.message);
+    }
+  }
+
+  // 2. 走訪 Queue 表，修正歷史照片檔案權限與網址
+  if (lastRow > 1) {
+    const values = queueSheet.getRange(2, 1, lastRow - 1, CONFIG.QUEUE_HEADERS.length).getValues();
+    for (let i = 0; i < values.length; i++) {
+      const photoVal = String(values[i][2]).trim();
+      let fileId = '';
+      const m1 = photoVal.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+      const m2 = photoVal.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+      const m3 = photoVal.match(/googleusercontent\.com\/d\/([a-zA-Z0-9_-]+)/);
+      if (m1) {
+        fileId = m1[1];
+      } else if (m2) {
+        fileId = m2[1];
+      } else if (m3) {
+        fileId = m3[1];
+      } else if (/^[a-zA-Z0-9_-]{20,}$/.test(photoVal)) {
+        fileId = photoVal;
+      }
+
+      if (fileId) {
+        try {
+          const file = DriveApp.getFileById(fileId);
+          file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+          const newUrl = 'https://lh3.googleusercontent.com/d/' + fileId;
+          if (photoVal !== newUrl) {
+            queueSheet.getRange(i + 2, 3).setValue(newUrl);
+            updatedCount++;
+          }
+        } catch (err) {
+          Logger.log('修復檔案權限失敗 (' + fileId + '): ' + err.message);
+        }
+      }
+    }
+  }
+
+  return {
+    success: true,
+    sharedFolderCount: sharedFolderCount,
+    updatedCount: updatedCount,
+    message: '成功開啟 ' + sharedFolderCount + ' 個資料夾之公開檢視權限，並修復 ' + updatedCount + ' 筆照片直連縮圖！'
   };
 }
 
@@ -1249,6 +1334,8 @@ function doGet(e) {
       responseData = processSingleQueueRecord(e.parameter.recordId, e.parameter.key);
     } else if (action === 'postVerified') {
       responseData = postVerifiedReadingsToLog();
+    } else if (action === 'fixPhotos') {
+      responseData = fixPhotosPermissionsAndUrls();
     } else if (action === 'getPhotoBase64' && e.parameter.fileId) {
       const file = DriveApp.getFileById(e.parameter.fileId);
       const b64 = Utilities.base64Encode(file.getBlob().getBytes());

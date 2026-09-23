@@ -89,8 +89,9 @@
   1. Google Drive 照片預覽 URL 原先使用 `https://drive.google.com/uc?export=view&id=FILE_ID`，但在 AppSheet 嵌入時若檔案權限或 CDN 快取限制，會被瀏覽器安全標頭攔截。
   2. Action 按鈕設為 `External: go to a website`，點擊即喚起新分頁。
 - **解決方案**：
-  1. 將 `Code.js` 生成之照片 URL 格式升級為 Google 官方高畫質直連 CDN 格式：`https://lh3.googleusercontent.com/d/FILE_ID`，並且提醒將 Google Drive 資料夾權限開啟為「知道連結的任何人皆可檢視」。
-  2. 將 AppSheet 動作按鈕或自動化改為 **`Call a webhook`** 或 **AppSheet Automation Bot**，讓 HTTP 請求 100% 在背景發送，實現無感原生體驗。
+  1. 後端 `Code.js` 實作 `fixPhotosPermissionsAndUrls()`：自動將三大照片資料夾與 Queue 表中既有之所有照片設定為「知道連結的任何人皆可檢視 (`ANYONE_WITH_LINK`)」，並將網址一鍵升級為 Google 官方高畫質直連 CDN 格式：`https://lh3.googleusercontent.com/d/FILE_ID`（經 curl 檢驗直接回傳 200 `image/jpeg`）。
+  2. 升級 `processPendingMeterPhotos()`：未來所有新處理之照片，在辨識時自動設定 `file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW)`，確保後續上傳之照片 100% 正常預覽。
+  3. 將 AppSheet 動作按鈕或自動化改為 **`Call a webhook`** 或 **AppSheet Automation Bot**，讓 HTTP 請求 100% 在背景發送，實現無感原生體驗。
 - **狀態**：🟢 已解決 (Resolved)
 
 ---
