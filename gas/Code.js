@@ -988,9 +988,8 @@ function deduplicateQueueSheet() {
 
     const fileId = extractDriveFileId(photoUrl);
 
-    // 若已經過帳，直接保留歷史過帳紀錄
+    // 防呆：若已經過帳，代表度數已安全寫入主檔，直接自待審核暫存表中移除，保持清爽！
     if (status === '已過帳' || status === '已核准') {
-      cleanRows.push(row);
       continue;
     }
 
@@ -1398,6 +1397,7 @@ function postVerifiedReadingsToLog() {
           }
 
           queueSheet.getRange(i + 2, 11).setValue('已過帳');
+          qRow[10] = '已過帳';
           postedCount++;
           break;
         }
@@ -1405,10 +1405,28 @@ function postVerifiedReadingsToLog() {
     }
   }
 
+  // 自動清理：將已成功過帳的資料列從「待審核暫存表」中移出，確保 AppSheet 畫面立即清爽
+  if (postedCount > 0) {
+    const remainingRows = [];
+    for (let r = 0; r < qData.length; r++) {
+      const row = qData[r];
+      const isBlank = !String(row[0] || '').trim() && !String(row[2] || '').trim();
+      const isPosted = String(row[10] || '').trim() === '已過帳';
+      if (!isBlank && !isPosted) {
+        remainingRows.push(row);
+      }
+    }
+
+    queueSheet.getRange(2, 1, qLastRow, CONFIG.QUEUE_HEADERS.length).clearContent();
+    if (remainingRows.length > 0) {
+      queueSheet.getRange(2, 1, remainingRows.length, CONFIG.QUEUE_HEADERS.length).setValues(remainingRows);
+    }
+  }
+
   return {
     success: true,
     postedCount: postedCount,
-    message: '成功將 ' + postedCount + ' 筆合格度數回填至主表！'
+    message: '成功將 ' + postedCount + ' 筆合格度數回填至主表，並已自待審核清單中自動移出！'
   };
 }
 
