@@ -848,9 +848,46 @@ function checkCounterMasterStatus(counterCode, counterName, checkDate) {
 }
 
 /**
- * 輔助：從主表中查找專櫃前期度數 (優先使用專櫃代碼 counterCode 比對)
+ * 根據上傳/抄表日期計算對應的財務結帳年月 (Billing YearMonth)
+ * 業務鐵律 (Billing Cycle Window Rule)：
+ * - 每月 20 日到次月 5 日前上傳的照片，歸屬於該結算週期 (如 9/20 ~ 10/5 歸屬 202609)
+ * - 每月 1~5 日上傳：歸屬上月結算補登 (例如 10/1 ~ 10/5 歸屬 202609)
+ * - 每月 6~31 日上傳：歸屬當月結算 (例如 9/23 歸屬 202609, 10/8 歸屬 202610)
  */
-function lookupPreviousReading(counterCode, counterName, meterType) {
+function resolveBillingYearMonth(dateObj) {
+  let d = new Date();
+  if (dateObj) {
+    if (dateObj instanceof Date) {
+      d = dateObj;
+    } else {
+      const parsed = new Date(String(dateObj).replace(/-/g, '/'));
+      if (!isNaN(parsed.getTime())) {
+        d = parsed;
+      }
+    }
+  }
+
+  const day = d.getDate();
+  let year = d.getFullYear();
+  let month = d.getMonth() + 1; // 1-based (1~12)
+
+  if (day <= 5) {
+    // 1~5 日上傳：視為上月抄表結算補登
+    month -= 1;
+    if (month === 0) {
+      month = 12;
+      year -= 1;
+    }
+  }
+
+  const ymStr = String(year) + (month < 10 ? '0' + month : String(month));
+  return ymStr;
+}
+
+/**
+ * 輔助：從主表中查找專櫃前期度數 (優先鎖定結帳期別 targetYm 與專櫃代碼 counterCode 比對)
+ */
+function lookupPreviousReading(counterCode, counterName, meterType, targetYm) {
   try {
     const ss = getAppSpreadsheet();
     let sheet = ss.getSheetByName(CONFIG.SHEET_LOG) || ss.getSheetByName(CONFIG.SHEET_LOG_ALT);
@@ -865,6 +902,9 @@ function lookupPreviousReading(counterCode, counterName, meterType) {
     if (counterCode && String(counterCode).trim() !== '') {
       const targetCodeNum = parseInt(counterCode, 10);
       for (let i = data.length - 1; i >= 0; i--) {
+        const rowYm = String(data[i][0]).trim();
+        if (targetYm && rowYm !== String(targetYm)) continue;
+
         const rowCode = String(data[i][1]).trim();
         const rowCodeNum = parseInt(rowCode, 10);
         if (rowCode === counterCode || (!isNaN(targetCodeNum) && rowCodeNum === targetCodeNum)) {
@@ -877,7 +917,7 @@ function lookupPreviousReading(counterCode, counterName, meterType) {
           } else if (meterType === '水表') {
             prev = Number(data[i][9]) || 0;
           }
-          return { counterCode: rowCode, counterName: matchedName, previousReading: prev };
+          return { counterCode: rowCode, counterName: matchedName, previousReading: prev, targetYearMonth: rowYm };
         }
       }
     }
@@ -885,6 +925,9 @@ function lookupPreviousReading(counterCode, counterName, meterType) {
     // 2. 備援：以專櫃名稱模糊比對
     if (counterName && String(counterName).trim() !== '') {
       for (let i = data.length - 1; i >= 0; i--) {
+        const rowYm = String(data[i][0]).trim();
+        if (targetYm && rowYm !== String(targetYm)) continue;
+
         const rowName = String(data[i][2]).trim();
         if (rowName && (rowName.indexOf(counterName) !== -1 || counterName.indexOf(rowName) !== -1)) {
           const rowCode = String(data[i][1]).trim();
@@ -896,7 +939,7 @@ function lookupPreviousReading(counterCode, counterName, meterType) {
           } else if (meterType === '水表') {
             prev = Number(data[i][9]) || 0;
           }
-          return { counterCode: rowCode, counterName: rowName, previousReading: prev };
+          return { counterCode: rowCode, counterName: rowName, previousReading: prev, targetYearMonth: rowYm };
         }
       }
     }
@@ -1136,11 +1179,12 @@ function processPendingMeterPhotos(limit, apiKeyOverride) {
         status = '已撤櫃';
         notes = '⚠️ [已撤櫃專櫃] 專櫃 [' + (masterCheck.masterName || effectiveName) + '] 已於 ' + (masterCheck.retireDate || '指定日期') + ' 撤櫃，跳过度數辨識！';
       } else {
-        // 正常營業中專櫃：讀取度數與計算用量
         reading = ocrResult.reading !== undefined ? ocrResult.reading : '';
         const isValid = !!ocrResult.is_valid_reading;
 
-        const lookup = lookupPreviousReading(effectiveCode, effectiveName, meterType);
+        // 依據照片日期動態解析結帳年月 (9/20~10/5 歸屬 202609)
+        const targetYm = resolveBillingYearMonth(file.getDateCreated());
+        const lookup = lookupPreviousReading(effectiveCode, effectiveName, meterType, targetYm);
         prevReading = lookup.previousReading;
         finalCode = lookup.counterCode || effectiveCode;
         finalName = lookup.counterName || effectiveName;
@@ -1384,12 +1428,16 @@ function postVerifiedReadingsToLog() {
     const counterCode = String(qRow[3]).trim();
     const counterName = String(qRow[4]).trim();
     const meterType = qRow[5];
+    const uploadTimeStr = qRow[1];
+
+    // 業務鐵律 (Billing Cycle Window Rule)：每月 20 日到次月 5 日前上傳的照片歸屬於該結算期
+    const targetYm = resolveBillingYearMonth(uploadTimeStr);
 
     if (status !== '異常' && status !== '已過帳' && verifiedReading !== '') {
-      // 關鍵修復：由後往前搜尋最新期 (latestYm) 專櫃，絕對不竄改歷史月份！
+      // 嚴格回填至照片對應之 targetYm，絕對不會跨月誤寫至其他月份！
       for (let j = logData.length - 1; j >= 0; j--) {
         const ym = String(logData[j][0]).trim();
-        if (latestYm && ym !== latestYm) continue;
+        if (ym !== targetYm) continue;
 
         const lCode = String(logData[j][1]).trim();
         const lName = String(logData[j][2]).trim();
