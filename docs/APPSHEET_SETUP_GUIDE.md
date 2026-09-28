@@ -65,7 +65,24 @@
 
 ---
 
-## 🎨 四、 視覺紅綠燈防呆規則 (Format Rules)
+## 🔪 四、 資料切片設定 (Data Slices - 隱藏已撤櫃專櫃)
+
+為了讓現場巡檢與專櫃清單保持清爽，同時保留歷史帳務完整性，**嚴禁從底層資料表刪除撤櫃專櫃**。我們使用 AppSheet 的 **Slice（切片過濾）** 機制：
+
+### 1. 建立 `營業中專櫃_Slice`
+進入 **Data > Slices**，點擊 **+ Create a Slice**：
+- **Slice Name**：`營業中專櫃_Slice`
+- **Source Table**：`櫃位主檔_Master`
+- **Row filter condition**（過濾公式）：
+  ```excel
+  [專櫃狀態] <> "已撤櫃"
+  ```
+  *(進階自動依日期判定可設為：`AND([專櫃狀態] <> "已撤櫃", OR(ISBLANK([撤櫃日期]), [撤櫃日期] > TODAY()))`)*
+- **Slice Actions**：維持預設（可新增、編輯、讀取）。
+
+---
+
+## 🎨 五、 視覺紅綠燈防呆規則 (Format Rules)
 
 進入 **UX > Format Rules**，建立三組色彩視覺提示，讓異常一目了然：
 
@@ -114,7 +131,7 @@
 
 ---
 
-## 🖼️ 五、 視圖設計 (UX Views)
+## 🖼️ 六、 視圖設計 (UX Views)
 
 ### 1. 主工作台：待審核清單 (Deck View)
 - **View Name**：`待審核抄表清單`
@@ -129,10 +146,10 @@
   - **Main image shape**：`Square` (正方形便於看清表具與貼紙)
 - **Sort by**：`[審核狀態]` Descending, `[上傳時間]` Descending
 
-### 2. 專櫃主檔管理台 (Table View - 替換原本的 Statistics 視圖)
+### 2. 專櫃主檔管理台 (Table View - 僅顯示營業中櫃位)
 - **說明**：若 AppSheet 預設建立了 `Statistics` 圖表視圖，可直接點擊該視圖並進行修改（或點右上角 🗑️ 刪除）。
 - **View Name**：`專櫃主檔` (可直接覆蓋原 `Statistics`)
-- **For this data**：`櫃位主檔_Master`
+- **For this data**：切換為 **`營業中專櫃_Slice`**（自動過濾並隱藏已撤櫃）
 - **View Type**：**Table** (表格) 或 **Deck** (卡片)
 - **Position**：`Menu` 或 `Primary`
 - **Display Icon**：`storefront` 或 `business`
@@ -146,7 +163,7 @@
 
 ---
 
-## ⚡ 六、 自訂動作按鈕 (Actions)
+## ⚡ 七、 自訂動作按鈕 (Actions)
 
 進入 **Behavior > Actions**，建立以下核心業務按鈕：
 
@@ -219,7 +236,7 @@
 
 ---
 
-## 🔒 七、 安全與防呆檢核表 (Pre-Flight Checklist)
+## 🔒 八、 安全與防呆檢核表 (Pre-Flight Checklist)
 
 在 AppSheet 正式上線前，請確認以下事項：
 - [ ] 主表 `水電軌道燈紀錄_Log` 權限是否確實為 **Read-Only**？
